@@ -244,6 +244,7 @@ export default function App() {
                 {shifts.length === 0 ? (
                     <p>No shifts recorded yet.</p>
                 ) : (
+                    <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid #ccc' }}>
                     <table>
                         <thead>
                         <tr>
@@ -267,6 +268,7 @@ export default function App() {
                         ))}
                         </tbody>
                     </table>
+                    </div>
                 )}
             </div>
         </div>
