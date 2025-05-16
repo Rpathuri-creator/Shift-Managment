@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { format, parseISO } from 'date-fns';
 
 // Set this to your own Google Apps Script URL after deployment
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzkBXUtGmapyVqF_Ry8JozL-9bMzcM3MUWTzEHdDTodqH6RUWzm0bWY2GokgVmcEd36yg/exec";
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxGN7S9T_1DPAMe0x8Y5lchI6MCkkmgAcyFudGHSKoMEXttK-G_IODWM9IZT3-qRHP-oA/exec";
 
 export default function App() {
     const [employee, setEmployee] = useState('');
