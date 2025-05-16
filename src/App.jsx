@@ -14,6 +14,12 @@ export default function App() {
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
 
+
+    const parseLocalDate = (dateString: string): Date => {
+        const [year, month, day] = dateString.split('-').map(Number);
+        return new Date(year, month - 1, day);
+    };
+
     const formatTimeOnly = (value) => {
         if (!value) return '-';
         const dateObj = new Date(value);
@@ -212,7 +218,7 @@ export default function App() {
                         {[...Array(daysInMonth)].map((_, i) => {
                             const dayNum = i + 1;
                             const dayDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), dayNum);
-                            const formattedDate = format(dayDate, 'yyyy-MM-dd');
+                            const formattedDate = format(parseLocalDate(format(dayDate, 'yyyy-MM-dd')), 'yyyy-MM-dd');
 
                             return (
                                 <div className="day" key={dayNum}>
@@ -254,7 +260,7 @@ export default function App() {
                                 <td>{s.employee}</td>
                                 <td>{format(new Date(s.date), 'yyyy-MM-dd')}</td>
 
-                                <td>{formatTimeOnly(s.startTime)}</td>
+                                <td>{format(parseLocalDate(s.date), 'yyyy-MM-dd')}</td>
                                 <td>{formatTimeOnly(s.endTime)}</td>
                                 <td>{calculateHours(s.date, s.startTime, s.endTime)}</td>
                             </tr>
