@@ -14,11 +14,11 @@ export default function App() {
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
 
-
-    const parseLocalDate = (dateString: string): Date => {
+    const parseLocalDate = (dateString) => {
         const [year, month, day] = dateString.split('-').map(Number);
-        return new Date(year, month - 1, day);
+        return new Date(year, month - 1, day, 12, 0, 0); // Local date, safe noon time
     };
+
 
     const formatTimeOnly = (value) => {
         if (!value) return '-';
@@ -224,11 +224,11 @@ export default function App() {
                                 <div className="day" key={dayNum}>
                                     <div className="day-number">{dayNum}</div>
                                     {shifts
-                                        .filter(s => format(new Date(s.date), 'yyyy-MM-dd') === formattedDate)
+                                        .filter(s => format(parseLocalDate(s.date), 'yyyy-MM-dd') === formattedDate)
                                         .map((s, idx) => (
                                             <div className="shift" key={idx}>
                                                 <b>{s.employee}</b><br />
-                                                {formatTimeOnly(s.startTime)} - {formatTimeOnly(s.endTime)}
+                                                {s.startTime} - {s.endTime}
                                             </div>
                                         ))}
                                 </div>
