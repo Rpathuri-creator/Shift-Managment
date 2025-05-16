@@ -14,6 +14,20 @@ export default function App() {
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
 
+    const formatTimeOnly = (value) => {
+        if (!value) return '-';
+        const dateObj = new Date(value);
+
+        // If dateObj is invalid OR before 1900 (weird Google Sheets time)
+        if (isNaN(dateObj.getTime()) || dateObj.getFullYear() < 1900) {
+            // Just return original string (might already be correct)
+            return value;
+        }
+
+        // Otherwise, extract HH:mm
+        return dateObj.toISOString().substring(11, 16); // "HH:MM"
+    };
+
     const fetchShifts = async () => {
         try {
             setLoading(true);
@@ -204,11 +218,11 @@ export default function App() {
                                 <div className="day" key={dayNum}>
                                     <div className="day-number">{dayNum}</div>
                                     {shifts
-                                        .filter(s => s.date === formattedDate)
+                                        .filter(s => format(new Date(s.date), 'yyyy-MM-dd') === formattedDate)
                                         .map((s, idx) => (
                                             <div className="shift" key={idx}>
                                                 <b>{s.employee}</b><br />
-                                                {s.startTime} - {s.endTime}
+                                                {formatTimeOnly(s.startTime)} - {formatTimeOnly(s.endTime)}
                                             </div>
                                         ))}
                                 </div>
@@ -238,9 +252,10 @@ export default function App() {
                         {shifts.map((s, i) => (
                             <tr key={i}>
                                 <td>{s.employee}</td>
-                                <td>{s.date}</td>
-                                <td>{s.startTime}</td>
-                                <td>{s.endTime}</td>
+                                <td>{format(new Date(s.date), 'yyyy-MM-dd')}</td>
+
+                                <td>{formatTimeOnly(s.startTime)}</td>
+                                <td>{formatTimeOnly(s.endTime)}</td>
                                 <td>{calculateHours(s.date, s.startTime, s.endTime)}</td>
                             </tr>
                         ))}
