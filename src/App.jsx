@@ -18,7 +18,7 @@ export default function App() {
         try {
             setLoading(true);
             // For development/demo purposes, you can use local data instead of the API call
-            if (GOOGLE_SCRIPT_URL === "https://script.google.com/macros/s/AKfycbzkBXUtGmapyVqF_Ry8JozL-9bMzcM3MUWTzEHdDTodqH6RUWzm0bWY2GokgVmcEd36yg/exec") {
+            if (GOOGLE_SCRIPT_URL === "YOUR_SCRIPT_URL_HERE") {
                 // Demo data
                 const demoShifts = [
 
@@ -70,7 +70,7 @@ export default function App() {
 
         try {
             // For demo/development without Google Script
-            if (GOOGLE_SCRIPT_URL === "https://script.google.com/macros/s/AKfycbzkBXUtGmapyVqF_Ry8JozL-9bMzcM3MUWTzEHdDTodqH6RUWzm0bWY2GokgVmcEd36yg/exec") {
+            if (GOOGLE_SCRIPT_URL === "YOUR_SCRIPT_URL_HERE") {
                 setShifts(prev => [...prev, payload]);
                 setSuccess("Shift added successfully (demo mode)");
                 setEmployee('');
