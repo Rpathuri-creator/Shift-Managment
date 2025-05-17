@@ -261,7 +261,7 @@ export default function App() {
                                 <td>{s.employee}</td>
                                 <td>{format(new Date(s.date), 'yyyy-MM-dd')}</td>
 
-                                <td>{format(parseLocalDate(s.date), 'yyyy-MM-dd')}</td>
+                                <td>{formatTimeOnly(s.startTime)}</td>
                                 <td>{formatTimeOnly(s.endTime)}</td>
                                 <td>{calculateHours(s.date, s.startTime, s.endTime)}</td>
                             </tr>
