@@ -4,6 +4,23 @@ import { format, parseISO } from 'date-fns';
 // Set this to your own Google Apps Script URL after deployment
 const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxGN7S9T_1DPAMe0x8Y5lchI6MCkkmgAcyFudGHSKoMEXttK-G_IODWM9IZT3-qRHP-oA/exec";
 
+// Table header component for shifts summary
+function ShiftsTableHeader() {
+    return (
+        <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+            <thead>
+                <tr>
+                    <th>Employee</th>
+                    <th>Date</th>
+                    <th>Start Time</th>
+                    <th>End Time</th>
+                    <th>Hours</th>
+                </tr>
+            </thead>
+        </table>
+    );
+}
+
 export default function App() {
     const [employee, setEmployee] = useState('');
     const [date, setDate] = useState('');
@@ -14,11 +31,27 @@ export default function App() {
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
 
+    // Filter state for summary
+    const [filterFrom, setFilterFrom] = useState('');
+    const [filterTo, setFilterTo] = useState('');
+    const [filterEmployee, setFilterEmployee] = useState('');
+
+    // Filtered shifts and total hours
+    const filteredShifts = shifts.filter(s => {
+        const shiftDate = s.date;
+        const inDateRange = (!filterFrom || shiftDate >= filterFrom) && (!filterTo || shiftDate <= filterTo);
+        const matchesEmployee = !filterEmployee || s.employee.toLowerCase().includes(filterEmployee.toLowerCase());
+        return inDateRange && matchesEmployee;
+    });
+    const totalFilteredHours = filteredShifts.reduce((sum, s) => {
+        const hours = parseFloat(calculateHours(s.date, s.startTime, s.endTime));
+        return sum + (isNaN(hours) ? 0 : hours);
+    }, 0);
+
     const parseLocalDate = (dateString) => {
         const [year, month, day] = dateString.split('-').map(Number);
         return new Date(year, month - 1, day, 12, 0, 0); // Local date, safe noon time
     };
-
 
     const formatTimeOnly = (value) => {
         if (!value) return '-';
@@ -33,6 +66,20 @@ export default function App() {
         // Otherwise, extract HH:mm
         return dateObj.toISOString().substring(11, 16); // "HH:MM"
     };
+
+    // Calculate hours for a shift
+    function calculateHours(shiftDate, start, end) {
+        if (!start || !end || !shiftDate) return '-';
+        try {
+            const startDateTime = parseISO(`${shiftDate}T${start}`);
+            const endDateTime = parseISO(`${shiftDate}T${end}`);
+            const diffMs = endDateTime - startDateTime;
+            if (diffMs < 0) return '-'; // End time before start time
+            return (diffMs / (1000 * 60 * 60)).toFixed(2);
+        } catch (err) {
+            return '-';
+        }
+    }
 
     const fetchShifts = async () => {
         try {
@@ -127,7 +174,7 @@ export default function App() {
     }, []);
 
     // Get current month days (for calendar display)
-    const currentDate = new Date();
+    const [currentDate, setCurrentDate] = useState(new Date());
     const daysInMonth = new Date(
         currentDate.getFullYear(),
         currentDate.getMonth() + 1,
@@ -137,21 +184,12 @@ export default function App() {
     // Calculate month name
     const monthName = format(currentDate, 'MMMM yyyy');
 
-    // Calculate hours for a shift
-    const calculateHours = (shiftDate, start, end) => {
-        if (!start || !end || !shiftDate) return '-';
-
-        try {
-            const startDateTime = parseISO(`${shiftDate}T${start}`);
-            const endDateTime = parseISO(`${shiftDate}T${end}`);
-            const diffMs = endDateTime - startDateTime;
-
-            if (diffMs < 0) return '-'; // End time before start time
-
-            return (diffMs / (1000 * 60 * 60)).toFixed(2);
-        } catch (err) {
-            return '-';
-        }
+    // Handlers for month navigation
+    const handlePrevMonth = () => {
+        setCurrentDate(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
+    };
+    const handleNextMonth = () => {
+        setCurrentDate(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
     };
 
     return (
@@ -199,7 +237,12 @@ export default function App() {
 
             {/* Calendar View */}
             <div className="calendar-section">
-                <h2>Calendar View - {monthName}</h2>
+                <h2>Calendar View</h2>
+                <div className="month-navigation" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                    <button onClick={handlePrevMonth} style={{ fontSize: '1.5em', width: 40, height: 40, borderRadius: '50%' }} aria-label="Previous Month">&#8592;</button>
+                    <span style={{ fontWeight: 'bold', fontSize: '1.2em' }}>{monthName}</span>
+                    <button onClick={handleNextMonth} style={{ fontSize: '1.5em', width: 40, height: 40, borderRadius: '50%' }} aria-label="Next Month">&#8594;</button>
+                </div>
                 {loading ? (
                     <div className="loading">Loading shifts...</div>
                 ) : (
@@ -219,18 +262,18 @@ export default function App() {
                             const dayNum = i + 1;
                             const dayDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), dayNum);
                             const formattedDate = format(parseLocalDate(format(dayDate, 'yyyy-MM-dd')), 'yyyy-MM-dd');
+                            const dayShifts = shifts.filter(s => format(parseLocalDate(s.date), 'yyyy-MM-dd') === formattedDate);
+                            const hasShift = dayShifts.length > 0;
 
                             return (
-                                <div className="day" key={dayNum}>
+                                <div className={`day${hasShift ? ' has-shift' : ''}`} key={dayNum}>
                                     <div className="day-number">{dayNum}</div>
-                                    {shifts
-                                        .filter(s => format(parseLocalDate(s.date), 'yyyy-MM-dd') === formattedDate)
-                                        .map((s, idx) => (
-                                            <div className="shift" key={idx}>
-                                                <b>{s.employee}</b><br />
-                                                {s.startTime} - {s.endTime}
-                                            </div>
-                                        ))}
+                                    {dayShifts.map((s, idx) => (
+                                        <div className="shift" key={idx}>
+                                            <b>{s.employee}</b><br />
+                                            {s.startTime} - {s.endTime}
+                                        </div>
+                                    ))}
                                 </div>
                             );
                         })}
@@ -244,33 +287,72 @@ export default function App() {
                 {shifts.length === 0 ? (
                     <p>No shifts recorded yet.</p>
                 ) : (
-                    <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid #ccc' }}>
-                    <table>
-                        <thead>
-                        <tr>
-                            <th>Employee</th>
-                            <th>Date</th>
-                            <th>Start Time</th>
-                            <th>End Time</th>
-                            <th>Hours</th>
-                        </tr>
-                        </thead>
-                        <tbody>
-                        {shifts.map((s, i) => (
-                            <tr key={i}>
-                                <td>{s.employee}</td>
-                                <td>{format(new Date(s.date), 'yyyy-MM-dd')}</td>
-
-                                <td>{formatTimeOnly(s.startTime)}</td>
-                                <td>{formatTimeOnly(s.endTime)}</td>
-                                <td>{calculateHours(s.date, s.startTime, s.endTime)}</td>
-                            </tr>
-                        ))}
-                        </tbody>
-                    </table>
-                    </div>
+                    <>
+                        <div style={{ overflow: 'hidden' }}>
+                            <ShiftsTableHeader />
+                        </div>
+                        <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid #ccc' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                                <tbody>
+                                {shifts.map((s, i) => (
+                                    <tr key={i}>
+                                        <td>{s.employee}</td>
+                                        <td>{format(new Date(s.date), 'yyyy-MM-dd')}</td>
+                                        <td>{formatTimeOnly(s.startTime)}</td>
+                                        <td>{formatTimeOnly(s.endTime)}</td>
+                                        <td>{calculateHours(s.date, s.startTime, s.endTime)}</td>
+                                    </tr>
+                                ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </>
                 )}
+                {/* Filtered summary form and table */}
+                <div style={{ marginTop: 30, background: '#f9f9f9', padding: 16, borderRadius: 8 }}>
+                    <h3>Filter Shifts</h3>
+                    <form style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }} onSubmit={e => e.preventDefault()}>
+                        <div>
+                            <label>From: </label>
+                            <input type="date" value={filterFrom} onChange={e => setFilterFrom(e.target.value)} />
+                        </div>
+                        <div>
+                            <label>To: </label>
+                            <input type="date" value={filterTo} onChange={e => setFilterTo(e.target.value)} />
+                        </div>
+                        <div>
+                            <label>Employee: </label>
+                            <input type="text" placeholder="Employee name" value={filterEmployee} onChange={e => setFilterEmployee(e.target.value)} />
+                        </div>
+                    </form>
+                    <div style={{ overflow: 'hidden' }}>
+                        <ShiftsTableHeader />
+                    </div>
+                    <div style={{ maxHeight: '200px', overflowY: 'auto', border: '1px solid #ccc' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                            <tbody>
+                            {filteredShifts.length === 0 ? (
+                                <tr><td colSpan={5} style={{ textAlign: 'center' }}>No shifts found for filter.</td></tr>
+                            ) : (
+                                filteredShifts.map((s, i) => (
+                                    <tr key={i}>
+                                        <td>{s.employee}</td>
+                                        <td>{format(new Date(s.date), 'yyyy-MM-dd')}</td>
+                                        <td>{formatTimeOnly(s.startTime)}</td>
+                                        <td>{formatTimeOnly(s.endTime)}</td>
+                                        <td>{calculateHours(s.date, s.startTime, s.endTime)}</td>
+                                    </tr>
+                                ))
+                            )}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div style={{ marginTop: 8, fontWeight: 'bold' }}>
+                        Total Hours: {totalFilteredHours.toFixed(2)}
+                    </div>
+                </div>
             </div>
         </div>
     );
 }
+
