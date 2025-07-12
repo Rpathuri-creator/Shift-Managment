@@ -1,31 +1,14 @@
-import React, { useState, useEffect } from 'react';
-import { format, parseISO } from 'date-fns';
+import React, { useState, useEffect, useCallback } from 'react';
 
 // Set this to your own Google Apps Script URL after deployment
 const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxGN7S9T_1DPAMe0x8Y5lchI6MCkkmgAcyFudGHSKoMEXttK-G_IODWM9IZT3-qRHP-oA/exec";
 
-// Table header component for shifts summary
-function ShiftsTableHeader() {
-    return (
-        <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
-            <thead>
-                <tr>
-                    <th>Employee</th>
-                    <th>Date</th>
-                    <th>Start Time</th>
-                    <th>End Time</th>
-                    <th>Hours</th>
-                </tr>
-            </thead>
-        </table>
-    );
-}
+export default function ShiftTracker() {
+    // Tab state
+    const [activeTab, setActiveTab] = useState('form');
 
-export default function App() {
-    const [employee, setEmployee] = useState('');
+    // Form states
     const [date, setDate] = useState('');
-    const [startTime, setStartTime] = useState('');
-    const [endTime, setEndTime] = useState('');
     const [shifts, setShifts] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
@@ -36,6 +19,125 @@ export default function App() {
     const [filterTo, setFilterTo] = useState('');
     const [filterEmployee, setFilterEmployee] = useState('');
 
+    // Multi-shift form state
+    const [shiftForms, setShiftForms] = useState([]);
+
+    // Calendar state
+    const [currentDate, setCurrentDate] = useState(new Date());
+
+    // Constants
+    const maxHoursPerDay = 13;
+    const sundayMaxHours = 7;
+
+    // Date utility functions (replacing date-fns)
+    const formatDate = (date, format) => {
+        const d = new Date(date);
+        if (format === 'yyyy-MM-dd') {
+            return d.toISOString().split('T')[0];
+        }
+        if (format === 'MMMM yyyy') {
+            return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+        }
+        if (format === 'EEEE') {
+            return d.toLocaleDateString('en-US', { weekday: 'long' });
+        }
+        return d.toISOString();
+    };
+
+    const parseISODate = (dateString) => {
+        return new Date(dateString + 'T00:00:00');
+    };
+
+    const startOfWeek = (date, options = {}) => {
+        const d = new Date(date);
+        const day = d.getDay(); // 0 = Sunday, 1 = Monday, etc.
+
+        if (options.weekStartsOn === 1) {
+            // Calculate days to subtract to get to Monday
+            const daysToSubtract = day === 0 ? 6 : day - 1;
+            const monday = new Date(d.getFullYear(), d.getMonth(), d.getDate() - daysToSubtract);
+            return monday;
+        }
+
+        // Default: week starts on Sunday
+        const diff = d.getDate() - day;
+        return new Date(d.setDate(diff));
+    };
+
+    const addDays = (date, days) => {
+        const result = new Date(date);
+        result.setDate(result.getDate() + days);
+        return result;
+    };
+
+    // Get day configuration
+    const getDayConfig = (dayIndex) => {
+        if (dayIndex === 0) { // Sunday
+            return {
+                maxHours: sundayMaxHours,
+                defaultStart: '11:00',
+                defaultEnd: '18:00'
+            };
+        }
+        return {
+            maxHours: maxHoursPerDay,
+            defaultStart: '09:00',
+            defaultEnd: '15:00'
+        };
+    };
+
+    // Calculate hours for a shift
+    const calculateHours = useCallback((shiftDate, start, end) => {
+        if (!start || !end || !shiftDate) return 0;
+        try {
+            const startDateTime = new Date(`${shiftDate}T${start}`);
+            const endDateTime = new Date(`${shiftDate}T${end}`);
+            const diffMs = endDateTime - startDateTime;
+            if (diffMs < 0) return 0; // End time before start time
+            return diffMs / (1000 * 60 * 60);
+        } catch {
+            return 0;
+        }
+    }, []);
+
+    // Format time for display
+    const formatTimeOnly = useCallback((value) => {
+        if (!value) return '-';
+        const dateObj = new Date(value);
+
+        if (isNaN(dateObj.getTime()) || dateObj.getFullYear() < 1900) {
+            return value;
+        }
+
+        return dateObj.toISOString().substring(11, 16);
+    }, []);
+
+    // Get week dates from selected date
+    const getWeekDates = useCallback((selectedDate) => {
+        if (!selectedDate) return [];
+
+        // Get the Monday of the week that contains the selected date
+        const startDate = startOfWeek(new Date(selectedDate), { weekStartsOn: 1 });
+        const weekDates = [];
+
+        for (let i = 0; i < 7; i++) {
+            const currentDay = addDays(startDate, i);
+            const dayConfig = getDayConfig(currentDay.getDay());
+            weekDates.push({
+                date: formatDate(currentDay, 'yyyy-MM-dd'),
+                dayName: formatDate(currentDay, 'EEEE'),
+                maxHours: dayConfig.maxHours,
+                defaultStart: dayConfig.defaultStart,
+                defaultEnd: dayConfig.defaultEnd
+            });
+        }
+
+        return weekDates;
+    }, []);
+
+    // Get unique employee names from shifts
+    const employeeList = Array.from(new Set(shifts.map(s => s.employee))).filter(Boolean);
+
     // Filtered shifts and total hours
     const filteredShifts = shifts.filter(s => {
         const shiftDate = s.date;
@@ -43,316 +145,578 @@ export default function App() {
         const matchesEmployee = !filterEmployee || s.employee.toLowerCase().includes(filterEmployee.toLowerCase());
         return inDateRange && matchesEmployee;
     });
+
     const totalFilteredHours = filteredShifts.reduce((sum, s) => {
-        const hours = parseFloat(calculateHours(s.date, s.startTime, s.endTime));
-        return sum + (isNaN(hours) ? 0 : hours);
+        const hours = calculateHours(s.date, s.startTime, s.endTime);
+        return sum + hours;
     }, 0);
 
-    const parseLocalDate = (dateString) => {
-        const [year, month, day] = dateString.split('-').map(Number);
-        return new Date(year, month - 1, day, 12, 0, 0); // Local date, safe noon time
-    };
-
-    const formatTimeOnly = (value) => {
-        if (!value) return '-';
-        const dateObj = new Date(value);
-
-        // If dateObj is invalid OR before 1900 (weird Google Sheets time)
-        if (isNaN(dateObj.getTime()) || dateObj.getFullYear() < 1900) {
-            // Just return original string (might already be correct)
-            return value;
-        }
-
-        // Otherwise, extract HH:mm
-        return dateObj.toISOString().substring(11, 16); // "HH:MM"
-    };
-
-    // Calculate hours for a shift
-    function calculateHours(shiftDate, start, end) {
-        if (!start || !end || !shiftDate) return '-';
-        try {
-            const startDateTime = parseISO(`${shiftDate}T${start}`);
-            const endDateTime = parseISO(`${shiftDate}T${end}`);
-            const diffMs = endDateTime - startDateTime;
-            if (diffMs < 0) return '-'; // End time before start time
-            return (diffMs / (1000 * 60 * 60)).toFixed(2);
-        } catch (err) {
-            return '-';
-        }
-    }
-
-    const fetchShifts = async () => {
+    // Fetch shifts from API
+    const fetchShifts = useCallback(async () => {
         try {
             setLoading(true);
-            // For development/demo purposes, you can use local data instead of the API call
-            if (GOOGLE_SCRIPT_URL === "YOUR_SCRIPT_URL_HERE") {
-                // Demo data
-                const demoShifts = [
+            setError('');
 
+            // Demo data fallback
+            if (GOOGLE_SCRIPT_URL.includes("YOUR_SCRIPT_URL_HERE")) {
+                const demoShifts = [
+                    { employee: "John Doe", date: "2025-07-15", startTime: "09:00", endTime: "17:00" },
+                    { employee: "Jane Smith", date: "2025-07-15", startTime: "12:00", endTime: "20:00" },
+                    { employee: "Mike Johnson", date: "2025-07-16", startTime: "08:30", endTime: "16:30" },
+                    { employee: "Sarah Wilson", date: "2025-07-17", startTime: "10:00", endTime: "18:00" },
+                    { employee: "Alice Brown", date: "2025-07-14", startTime: "11:00", endTime: "18:00" }
                 ];
                 setShifts(demoShifts);
-                setLoading(false);
                 return;
             }
 
             const response = await fetch(GOOGLE_SCRIPT_URL);
+            if (!response.ok) {
+                throw new Error('Failed to fetch shifts');
+            }
+
             const data = await response.json();
             setShifts(data.shifts || []);
-        } catch (err) {
-            console.error("Error fetching shifts:", err);
+        } catch (error) {
+            console.error("Error fetching shifts:", error);
             setError("Failed to load shifts. Using demo data instead.");
             // Fallback to demo data
             const demoShifts = [
-                { employee: "John Doe", date: "2025-05-15", startTime: "09:00", endTime: "17:00" },
-                { employee: "Jane Smith", date: "2025-05-15", startTime: "12:00", endTime: "20:00" },
-                { employee: "Mike Johnson", date: "2025-05-16", startTime: "08:30", endTime: "16:30" }
+                { employee: "John Doe", date: "2025-07-15", startTime: "09:00", endTime: "17:00" },
+                { employee: "Jane Smith", date: "2025-07-15", startTime: "12:00", endTime: "20:00" },
+                { employee: "Mike Johnson", date: "2025-07-16", startTime: "08:30", endTime: "16:30" },
+                { employee: "Sarah Wilson", date: "2025-07-17", startTime: "10:00", endTime: "18:00" }
             ];
             setShifts(demoShifts);
         } finally {
             setLoading(false);
         }
+    }, []);
+
+    // Initialize shift forms when date changes
+    useEffect(() => {
+        if (date) {
+            const weekDates = getWeekDates(date);
+            const newForms = weekDates.map(day => ({
+                employee: '',
+                startTime: day.defaultStart,
+                endTime: day.defaultEnd,
+                date: day.date,
+                maxHours: day.maxHours
+            }));
+            setShiftForms(newForms);
+        }
+    }, [date, getWeekDates]);
+
+    // Calculate total hours for a specific date
+    const getTotalHoursForDate = useCallback((formDate) => {
+        // Existing shifts for this date
+        const existingShifts = shifts.filter(s => s.date === formDate);
+        const existingHours = existingShifts.reduce((sum, s) => {
+            return sum + calculateHours(s.date, s.startTime, s.endTime);
+        }, 0);
+
+        // Forms for this date
+        const dayForms = shiftForms.filter(f => f.date === formDate && f.employee);
+        const formHours = dayForms.reduce((sum, f) => {
+            return sum + calculateHours(f.date, f.startTime, f.endTime);
+        }, 0);
+
+        return existingHours + formHours;
+    }, [shifts, shiftForms, calculateHours]);
+
+    // Handle form changes
+    const handleFormChange = (idx, field, value) => {
+        setShiftForms(forms => forms.map((f, i) => i === idx ? { ...f, [field]: value } : f));
     };
 
-    const handleSubmit = async () => {
-        // Validate inputs
-        if (!employee.trim()) {
-            setError("Please enter employee name");
-            return;
-        }
-        if (!date) {
-            setError("Please select a date");
-            return;
-        }
-        if (!startTime) {
-            setError("Please select start time");
-            return;
-        }
-        if (!endTime) {
-            setError("Please select end time");
-            return;
-        }
+    // Add more shift for a specific date
+    const handleAddMoreShiftForDate = (targetDate, dayIndex) => {
+        const config = getDayConfig(dayIndex);
+        const newForm = {
+            employee: '',
+            startTime: config.defaultStart,
+            endTime: config.defaultEnd,
+            date: targetDate,
+            maxHours: config.maxHours
+        };
+        setShiftForms(prev => [...prev, newForm]);
+    };
 
-        const payload = { employee, date, startTime, endTime };
-        setError('');
-
+    // Submit all forms for the week
+    const handleWeekSubmit = async () => {
         try {
-            // For demo/development without Google Script
-            if (GOOGLE_SCRIPT_URL === "YOUR_SCRIPT_URL_HERE") {
-                setShifts(prev => [...prev, payload]);
-                setSuccess("Shift added successfully (demo mode)");
-                setEmployee('');
-                setDate('');
-                setStartTime('');
-                setEndTime('');
+            setError('');
+            setSuccess('');
+
+            // Only submit forms that have an employee selected
+            const formsToSubmit = shiftForms.filter(f => f.employee && f.startTime && f.endTime);
+
+            if (formsToSubmit.length === 0) {
+                setError("Please fill at least one shift form.");
                 return;
             }
 
-            const response = await fetch(GOOGLE_SCRIPT_URL, {
-                method: 'POST',
-                body: new URLSearchParams(payload),
+            // Validate hours don't exceed daily limits
+            const dateHours = {};
+            formsToSubmit.forEach(f => {
+                const hours = calculateHours(f.date, f.startTime, f.endTime);
+                dateHours[f.date] = (dateHours[f.date] || 0) + hours;
             });
 
-            const data = await response.json();
-            if (data.result === "success") {
-                setShifts(prev => [...prev, payload]);
-                setSuccess("Shift added successfully");
-                setEmployee('');
-                setDate('');
-                setStartTime('');
-                setEndTime('');
-            } else {
-                setError("Failed to add shift");
+            const exceededDays = Object.entries(dateHours).filter(([date, hours]) => {
+                const dayOfWeek = new Date(date).getDay();
+                const maxHours = dayOfWeek === 0 ? sundayMaxHours : maxHoursPerDay;
+                return hours > maxHours;
+            });
+
+            if (exceededDays.length > 0) {
+                setError(`Hours exceed daily limit for: ${exceededDays.map(([date]) => date).join(', ')}`);
+                return;
             }
-        } catch (err) {
-            console.error("Error adding shift:", err);
-            setError("Failed to add shift. Check your connection and try again.");
+
+            // Submit shifts
+            for (const form of formsToSubmit) {
+                const payload = {
+                    employee: form.employee,
+                    date: form.date,
+                    startTime: form.startTime,
+                    endTime: form.endTime
+                };
+
+                if (GOOGLE_SCRIPT_URL.includes("YOUR_SCRIPT_URL_HERE")) {
+                    setShifts(prev => [...prev, payload]);
+                } else {
+                    await fetch(GOOGLE_SCRIPT_URL, {
+                        method: 'POST',
+                        body: new URLSearchParams(payload),
+                    });
+                }
+            }
+
+            setSuccess(`Successfully added ${formsToSubmit.length} shift(s)!`);
+
+            // Reset forms but keep the week structure
+            if (date) {
+                const weekDates = getWeekDates(date);
+                const resetForms = weekDates.map(day => ({
+                    employee: '',
+                    startTime: day.defaultStart,
+                    endTime: day.defaultEnd,
+                    date: day.date,
+                    maxHours: day.maxHours
+                }));
+                setShiftForms(resetForms);
+            }
+
+            await fetchShifts();
+        } catch (error) {
+            console.error('Error submitting shifts:', error);
+            setError('Failed to submit shifts. Please try again.');
         }
     };
 
-    useEffect(() => {
-        fetchShifts();
-    }, []);
-
-    // Get current month days (for calendar display)
-    const [currentDate, setCurrentDate] = useState(new Date());
-    const daysInMonth = new Date(
-        currentDate.getFullYear(),
-        currentDate.getMonth() + 1,
-        0
-    ).getDate();
-
-    // Calculate month name
-    const monthName = format(currentDate, 'MMMM yyyy');
-
-    // Handlers for month navigation
+    // Calendar navigation
     const handlePrevMonth = () => {
         setCurrentDate(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
     };
+
     const handleNextMonth = () => {
         setCurrentDate(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
     };
 
+    // Initialize data
+    useEffect(() => {
+        fetchShifts();
+        // Set default date to today
+        setDate(formatDate(new Date(), 'yyyy-MM-dd'));
+    }, [fetchShifts]);
+
+    // Clear messages after 5 seconds
+    useEffect(() => {
+        if (success) {
+            const timer = setTimeout(() => setSuccess(''), 5000);
+            return () => clearTimeout(timer);
+        }
+    }, [success]);
+
+    useEffect(() => {
+        if (error) {
+            const timer = setTimeout(() => setError(''), 5000);
+            return () => clearTimeout(timer);
+        }
+    }, [error]);
+
+    // Calculate month details for calendar
+    const daysInMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
+    const firstDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).getDay();
+    const monthName = formatDate(currentDate, 'MMMM yyyy');
+
     return (
-        <div className="container">
-            <h1>Calder - Employee Shift Tracker</h1>
+        <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '20px', fontFamily: 'system-ui, -apple-system, sans-serif', backgroundColor: '#f8f9fa', minHeight: '100vh' }}>
+            <h1 style={{ textAlign: 'center', color: '#333', marginBottom: '30px', fontSize: '2.5em', fontWeight: '600' }}>
+                Calder - Employee Shift Tracker
+            </h1>
 
-            {/* Form for adding shifts */}
-            <div className="form-container">
-                <h2>Add New Shift</h2>
-                {error && <div className="error-message">{error}</div>}
-                {success && <div className="success-message">{success}</div>}
-
-                <div className="form">
-                    <input
-                        placeholder="Enter employee name"
-                        value={employee}
-                        onChange={e => setEmployee(e.target.value)}
-                    />
-                    <input
-                        type="date"
-                        value={date}
-                        onChange={e => setDate(e.target.value)}
-                    />
-                    <div className="time-inputs">
-                        <div>
-                            <label>Start Time:</label>
-                            <input
-                                type="time"
-                                value={startTime}
-                                onChange={e => setStartTime(e.target.value)}
-                            />
-                        </div>
-                        <div>
-                            <label>End Time:</label>
-                            <input
-                                type="time"
-                                value={endTime}
-                                onChange={e => setEndTime(e.target.value)}
-                            />
-                        </div>
-                    </div>
-                    <button onClick={handleSubmit}>Add Shift</button>
-                </div>
+            {/* Tab Navigation */}
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '30px', backgroundColor: '#fff', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+                <button
+                    onClick={() => setActiveTab('form')}
+                    style={{
+                        flex: 1,
+                        padding: '15px 30px',
+                        border: 'none',
+                        backgroundColor: activeTab === 'form' ? '#007bff' : '#fff',
+                        color: activeTab === 'form' ? 'white' : '#666',
+                        cursor: 'pointer',
+                        fontSize: '16px',
+                        transition: 'all 0.3s ease',
+                        borderBottom: activeTab === 'form' ? '3px solid #0056b3' : '3px solid transparent'
+                    }}
+                >
+                    Add Shifts
+                </button>
+                <button
+                    onClick={() => setActiveTab('calendar')}
+                    style={{
+                        flex: 1,
+                        padding: '15px 30px',
+                        border: 'none',
+                        backgroundColor: activeTab === 'calendar' ? '#007bff' : '#fff',
+                        color: activeTab === 'calendar' ? 'white' : '#666',
+                        cursor: 'pointer',
+                        fontSize: '16px',
+                        transition: 'all 0.3s ease',
+                        borderBottom: activeTab === 'calendar' ? '3px solid #0056b3' : '3px solid transparent'
+                    }}
+                >
+                    Calendar & Reports
+                </button>
             </div>
 
-            {/* Calendar View */}
-            <div className="calendar-section">
-                <h2>Calendar View</h2>
-                <div className="month-navigation" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                    <button onClick={handlePrevMonth} style={{ fontSize: '1.5em', width: 40, height: 40, borderRadius: '50%' }} aria-label="Previous Month">&#8592;</button>
-                    <span style={{ fontWeight: 'bold', fontSize: '1.2em' }}>{monthName}</span>
-                    <button onClick={handleNextMonth} style={{ fontSize: '1.5em', width: 40, height: 40, borderRadius: '50%' }} aria-label="Next Month">&#8594;</button>
+            {/* Messages */}
+            {error && (
+                <div style={{ backgroundColor: '#f8d7da', color: '#721c24', padding: '12px', borderRadius: '6px', marginBottom: '20px', border: '1px solid #f5c6cb', fontWeight: '500' }}>
+                    {error}
                 </div>
-                {loading ? (
-                    <div className="loading">Loading shifts...</div>
-                ) : (
-                    <div className="calendar">
-                        {/* Day headers */}
-                        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
-                            <div className="day-header" key={day}>{day}</div>
-                        ))}
+            )}
+            {success && (
+                <div style={{ backgroundColor: '#d4edda', color: '#155724', padding: '12px', borderRadius: '6px', marginBottom: '20px', border: '1px solid #c3e6cb', fontWeight: '500' }}>
+                    {success}
+                </div>
+            )}
 
-                        {/* Empty spaces for days before start of month */}
-                        {[...Array(new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).getDay())].map((_, i) => (
-                            <div className="day empty" key={`empty-${i}`}></div>
-                        ))}
+            {/* Tab Content */}
+            {activeTab === 'form' && (
+                <div style={{ backgroundColor: '#fff', padding: '30px', borderRadius: '12px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }}>
+                    <h2 style={{ textAlign: 'center', marginBottom: '20px', color: '#333', fontSize: '1.8em' }}>Add Weekly Shifts</h2>
 
-                        {/* Calendar days */}
-                        {[...Array(daysInMonth)].map((_, i) => {
-                            const dayNum = i + 1;
-                            const dayDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), dayNum);
-                            const formattedDate = format(parseLocalDate(format(dayDate, 'yyyy-MM-dd')), 'yyyy-MM-dd');
-                            const dayShifts = shifts.filter(s => format(parseLocalDate(s.date), 'yyyy-MM-dd') === formattedDate);
-                            const hasShift = dayShifts.length > 0;
+                    <div style={{ marginBottom: '20px' }}>
+                        <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500', color: '#333' }}>Select any date to show its week (Monday-Sunday):</label>
+                        <input
+                            type="date"
+                            value={date}
+                            onChange={e => setDate(e.target.value)}
+                            style={{ padding: '10px', border: '2px solid #dee2e6', borderRadius: '6px', width: '200px', fontSize: '14px' }}
+                        />
+                        {date && (
+                            <div style={{ marginTop: '8px', color: '#666', fontSize: '0.9em' }}>
+                                Selected date: {date} ({new Date(date).toLocaleDateString('en-US', { weekday: 'long' })})
+                                <br />
+                                Showing week: {getWeekDates(date)[0]?.date} ({getWeekDates(date)[0]?.dayName}) to {getWeekDates(date)[6]?.date} ({getWeekDates(date)[6]?.dayName})
+                            </div>
+                        )}
+                    </div>
 
-                            return (
-                                <div className={`day${hasShift ? ' has-shift' : ''}`} key={dayNum}>
-                                    <div className="day-number">{dayNum}</div>
-                                    {dayShifts.map((s, idx) => (
-                                        <div className="shift" key={idx}>
-                                            <b>{s.employee}</b><br />
-                                            {s.startTime} - {s.endTime}
+                    {date && (
+                        <div>
+                            {getWeekDates(date).map((dayInfo, weekIndex) => {
+                                const dayForms = shiftForms.filter(f => f.date === dayInfo.date);
+                                const totalHours = getTotalHoursForDate(dayInfo.date);
+                                const remainingHours = Math.max(0, dayInfo.maxHours - totalHours);
+                                const canAddMore = remainingHours > 0 && totalHours < dayInfo.maxHours;
+
+                                return (
+                                    <div key={weekIndex} style={{
+                                        border: '1px solid #dee2e6',
+                                        borderRadius: '8px',
+                                        padding: '16px',
+                                        marginBottom: '16px',
+                                        backgroundColor: totalHours >= dayInfo.maxHours ? '#fff5f5' : '#f8f9fa'
+                                    }}>
+                                        <div style={{
+                                            display: 'flex',
+                                            justifyContent: 'space-between',
+                                            alignItems: 'center',
+                                            marginBottom: '12px'
+                                        }}>
+                                            <h3 style={{ margin: 0, color: '#333' }}>{dayInfo.dayName} - {dayInfo.date}</h3>
+                                            <div style={{
+                                                color: totalHours >= dayInfo.maxHours ? '#dc3545' : (remainingHours > 0 ? '#28a745' : '#dc3545'),
+                                                fontWeight: '500'
+                                            }}>
+                                                {totalHours >= dayInfo.maxHours ? (
+                                                    <span>⚠️ Maximum hours reached ({totalHours.toFixed(1)}/{dayInfo.maxHours})</span>
+                                                ) : (
+                                                    <span>Hours Left: {remainingHours.toFixed(1)} / {dayInfo.maxHours}</span>
+                                                )}
+                                            </div>
                                         </div>
-                                    ))}
-                                </div>
-                            );
-                        })}
-                    </div>
-                )}
-            </div>
 
-            {/* Shifts Summary Table */}
-            <div className="shifts-summary">
-                <h2>Shifts Summary</h2>
-                {shifts.length === 0 ? (
-                    <p>No shifts recorded yet.</p>
-                ) : (
-                    <>
-                        <div style={{ overflow: 'hidden' }}>
-                            <ShiftsTableHeader />
+                                        {dayForms.map((form, formIdx) => (
+                                            <div key={formIdx} style={{
+                                                backgroundColor: 'white',
+                                                padding: '12px',
+                                                marginBottom: '8px',
+                                                borderRadius: '4px',
+                                                border: '1px solid #e9ecef'
+                                            }}>
+                                                <select
+                                                    value={form.employee}
+                                                    onChange={e => handleFormChange(shiftForms.indexOf(form), 'employee', e.target.value)}
+                                                    style={{
+                                                        width: '100%',
+                                                        padding: '8px',
+                                                        marginBottom: '8px',
+                                                        border: '1px solid #ccc',
+                                                        borderRadius: '4px',
+                                                        fontSize: '1em',
+                                                        backgroundColor: '#fff',
+                                                        color: form.employee ? '#222' : '#888'
+                                                    }}
+                                                >
+                                                    <option value="">Select employee</option>
+                                                    {employeeList.map(name => (
+                                                        <option key={name} value={name}>{name}</option>
+                                                    ))}
+                                                </select>
+                                                <div style={{ display: 'flex', gap: '16px' }}>
+                                                    <div style={{ flex: 1 }}>
+                                                        <label style={{ display: 'block', marginBottom: '4px', fontWeight: '500', color: '#333', fontSize: '0.9em' }}>Start Time:</label>
+                                                        <input
+                                                            type="time"
+                                                            value={form.startTime}
+                                                            onChange={e => handleFormChange(shiftForms.indexOf(form), 'startTime', e.target.value)}
+                                                            style={{
+                                                                width: '100%',
+                                                                padding: '8px',
+                                                                border: '1px solid #ccc',
+                                                                borderRadius: '4px'
+                                                            }}
+                                                        />
+                                                    </div>
+                                                    <div style={{ flex: 1 }}>
+                                                        <label style={{ display: 'block', marginBottom: '4px', fontWeight: '500', color: '#333', fontSize: '0.9em' }}>End Time:</label>
+                                                        <input
+                                                            type="time"
+                                                            value={form.endTime}
+                                                            onChange={e => handleFormChange(shiftForms.indexOf(form), 'endTime', e.target.value)}
+                                                            style={{
+                                                                width: '100%',
+                                                                padding: '8px',
+                                                                border: '1px solid #ccc',
+                                                                borderRadius: '4px'
+                                                            }}
+                                                        />
+                                                    </div>
+                                                </div>
+                                                {form.employee && form.startTime && form.endTime && (
+                                                    <div style={{ marginTop: '8px', color: '#666', fontSize: '0.9em' }}>
+                                                        Hours: {calculateHours(form.date, form.startTime, form.endTime).toFixed(2)}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+
+                                        {canAddMore ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => handleAddMoreShiftForDate(dayInfo.date, new Date(dayInfo.date).getDay())}
+                                                style={{
+                                                    padding: '8px 16px',
+                                                    backgroundColor: '#28a745',
+                                                    color: 'white',
+                                                    border: 'none',
+                                                    borderRadius: '4px',
+                                                    cursor: 'pointer',
+                                                    width: '100%',
+                                                    fontSize: '0.9em'
+                                                }}
+                                            >
+                                                Add More Shift ({remainingHours.toFixed(1)} hours left)
+                                            </button>
+                                        ) : (
+                                            <button
+                                                type="button"
+                                                disabled
+                                                style={{
+                                                    padding: '8px 16px',
+                                                    backgroundColor: '#6c757d',
+                                                    color: 'white',
+                                                    border: 'none',
+                                                    borderRadius: '4px',
+                                                    cursor: 'not-allowed',
+                                                    width: '100%',
+                                                    fontSize: '0.9em',
+                                                    opacity: 0.6
+                                                }}
+                                            >
+                                                {totalHours >= dayInfo.maxHours ? 'Maximum hours reached' : 'No hours remaining'}
+                                            </button>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                            <button
+                                onClick={handleWeekSubmit}
+                                style={{
+                                    padding: '12px 24px',
+                                    backgroundColor: '#007bff',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    fontSize: '16px',
+                                    width: '100%',
+                                    marginTop: '16px',
+                                    fontWeight: '500'
+                                }}
+                            >
+                                Submit All Shifts
+                            </button>
                         </div>
-                        <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid #ccc' }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                    )}
+                </div>
+            )}
+
+            {activeTab === 'calendar' && (
+                <div>
+                    {/* Calendar View */}
+                    <div style={{ backgroundColor: '#fff', padding: '30px', borderRadius: '12px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)', marginBottom: '30px' }}>
+                        <h2 style={{ color: '#333', marginBottom: '20px', fontSize: '1.8em', textAlign: 'center' }}>Calendar View</h2>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', padding: '0 20px' }}>
+                            <button onClick={handlePrevMonth} style={{ backgroundColor: '#007bff', color: 'white', border: 'none', padding: '10px 15px', borderRadius: '50%', cursor: 'pointer', fontSize: '18px', width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                ←
+                            </button>
+                            <span style={{ fontSize: '1.5em', fontWeight: '600', color: '#333' }}>{monthName}</span>
+                            <button onClick={handleNextMonth} style={{ backgroundColor: '#007bff', color: 'white', border: 'none', padding: '10px 15px', borderRadius: '50%', cursor: 'pointer', fontSize: '18px', width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                →
+                            </button>
+                        </div>
+                        {loading ? (
+                            <div style={{ textAlign: 'center', padding: '40px', color: '#666', fontSize: '1.1em' }}>Loading shifts...</div>
+                        ) : (
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '2px', backgroundColor: '#e9ecef', padding: '2px', borderRadius: '8px' }}>
+                                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
+                                    <div key={day} style={{ backgroundColor: '#6c757d', color: 'white', padding: '12px', textAlign: 'center', fontWeight: '600', fontSize: '0.9em' }}>
+                                        {day}
+                                    </div>
+                                ))}
+                                {[...Array(firstDayOfMonth)].map((_, i) => (
+                                    <div key={`empty-${i}`} style={{ backgroundColor: '#f8f9fa', minHeight: '100px' }}></div>
+                                ))}
+                                {[...Array(daysInMonth)].map((_, i) => {
+                                    const dayNum = i + 1;
+                                    const dayDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), dayNum);
+                                    const formattedDate = formatDate(dayDate, 'yyyy-MM-dd');
+                                    const dayShifts = shifts.filter(s => s.date === formattedDate);
+                                    const hasShift = dayShifts.length > 0;
+                                    return (
+                                        <div
+                                            key={dayNum}
+                                            style={{
+                                                backgroundColor: hasShift ? '#e3f2fd' : '#fff',
+                                                minHeight: '100px',
+                                                padding: '8px',
+                                                cursor: 'pointer',
+                                                transition: 'background-color 0.2s ease'
+                                            }}
+                                        >
+                                            <div style={{ fontWeight: '600', fontSize: '0.9em', color: '#333', marginBottom: '4px' }}>
+                                                {dayNum}
+                                            </div>
+                                            {dayShifts.map((s, idx) => (
+                                                <div key={idx} style={{ backgroundColor: '#007bff', color: 'white', padding: '2px 4px', borderRadius: '3px', fontSize: '0.7em', marginBottom: '2px', lineHeight: '1.2' }}>
+                                                    <div style={{ fontWeight: 'bold', fontSize: '0.8em' }}>{s.employee}</div>
+                                                    <div style={{ fontSize: '0.7em', opacity: 0.9 }}>
+                                                        {formatTimeOnly(s.startTime)} - {formatTimeOnly(s.endTime)} ({calculateHours(s.date, s.startTime, s.endTime).toFixed(1)}h)
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Filter Section */}
+                    <div style={{ backgroundColor: '#fff', padding: '30px', borderRadius: '12px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }}>
+                        <h2 style={{ color: '#333', marginBottom: '20px', fontSize: '1.8em', textAlign: 'center' }}>Filter Shifts</h2>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', marginBottom: '20px' }}>
+                            <div>
+                                <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500', color: '#333' }}>From Date</label>
+                                <input
+                                    type="date"
+                                    value={filterFrom}
+                                    onChange={(e) => setFilterFrom(e.target.value)}
+                                    style={{ width: '100%', padding: '10px', border: '2px solid #dee2e6', borderRadius: '6px', fontSize: '14px' }}
+                                />
+                            </div>
+                            <div>
+                                <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500', color: '#333' }}>To Date</label>
+                                <input
+                                    type="date"
+                                    value={filterTo}
+                                    onChange={(e) => setFilterTo(e.target.value)}
+                                    style={{ width: '100%', padding: '10px', border: '2px solid #dee2e6', borderRadius: '6px', fontSize: '14px' }}
+                                />
+                            </div>
+                            <div>
+                                <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500', color: '#333' }}>Employee</label>
+                                <select
+                                    value={filterEmployee}
+                                    onChange={(e) => setFilterEmployee(e.target.value)}
+                                    style={{ width: '100%', padding: '10px', border: '2px solid #dee2e6', borderRadius: '6px', fontSize: '14px' }}
+                                >
+                                    <option value="">All Employees</option>
+                                    {employeeList.map(name => (
+                                        <option key={name} value={name}>{name}</option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+                        <div style={{ marginBottom: '20px', fontSize: '1.1em', fontWeight: '500' }}>
+                            <strong>Total Hours: </strong>
+                            {totalFilteredHours.toFixed(2)}
+                        </div>
+                        <div style={{ maxHeight: '300px', overflowY: 'auto', marginTop: '10px' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+                                <thead>
+                                <tr>
+                                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #dee2e6', backgroundColor: '#f8f9fa', fontWeight: '600', color: '#333', position: 'sticky', top: 0, zIndex: 10 }}>Employee</th>
+                                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #dee2e6', backgroundColor: '#f8f9fa', fontWeight: '600', color: '#333', position: 'sticky', top: 0, zIndex: 10 }}>Date</th>
+                                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #dee2e6', backgroundColor: '#f8f9fa', fontWeight: '600', color: '#333', position: 'sticky', top: 0, zIndex: 10 }}>Start Time</th>
+                                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #dee2e6', backgroundColor: '#f8f9fa', fontWeight: '600', color: '#333', position: 'sticky', top: 0, zIndex: 10 }}>End Time</th>
+                                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #dee2e6', backgroundColor: '#f8f9fa', fontWeight: '600', color: '#333', position: 'sticky', top: 0, zIndex: 10 }}>Hours</th>
+                                </tr>
+                                </thead>
                                 <tbody>
-                                {shifts.map((s, i) => (
-                                    <tr key={i}>
-                                        <td>{s.employee}</td>
-                                        <td>{format(new Date(s.date), 'yyyy-MM-dd')}</td>
-                                        <td>{formatTimeOnly(s.startTime)}</td>
-                                        <td>{formatTimeOnly(s.endTime)}</td>
-                                        <td>{calculateHours(s.date, s.startTime, s.endTime)}</td>
+                                {filteredShifts.map((s, i) => (
+                                    <tr key={i} style={{ ':hover': { backgroundColor: '#f8f9fa' } }}>
+                                        <td style={{ padding: '12px', borderBottom: i === filteredShifts.length - 1 ? 'none' : '1px solid #dee2e6' }}>{s.employee}</td>
+                                        <td style={{ padding: '12px', borderBottom: i === filteredShifts.length - 1 ? 'none' : '1px solid #dee2e6' }}>{s.date}</td>
+                                        <td style={{ padding: '12px', borderBottom: i === filteredShifts.length - 1 ? 'none' : '1px solid #dee2e6' }}>{formatTimeOnly(s.startTime)}</td>
+                                        <td style={{ padding: '12px', borderBottom: i === filteredShifts.length - 1 ? 'none' : '1px solid #dee2e6' }}>{formatTimeOnly(s.endTime)}</td>
+                                        <td style={{ padding: '12px', borderBottom: i === filteredShifts.length - 1 ? 'none' : '1px solid #dee2e6' }}>{calculateHours(s.date, s.startTime, s.endTime).toFixed(2)}</td>
                                     </tr>
                                 ))}
                                 </tbody>
                             </table>
                         </div>
-                    </>
-                )}
-                {/* Filtered summary form and table */}
-                <div style={{ marginTop: 30, background: '#f9f9f9', padding: 16, borderRadius: 8 }}>
-                    <h3>Filter Shifts</h3>
-                    <form style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }} onSubmit={e => e.preventDefault()}>
-                        <div>
-                            <label>From: </label>
-                            <input type="date" value={filterFrom} onChange={e => setFilterFrom(e.target.value)} />
-                        </div>
-                        <div>
-                            <label>To: </label>
-                            <input type="date" value={filterTo} onChange={e => setFilterTo(e.target.value)} />
-                        </div>
-                        <div>
-                            <label>Employee: </label>
-                            <input type="text" placeholder="Employee name" value={filterEmployee} onChange={e => setFilterEmployee(e.target.value)} />
-                        </div>
-                    </form>
-                    <div style={{ overflow: 'hidden' }}>
-                        <ShiftsTableHeader />
-                    </div>
-                    <div style={{ maxHeight: '200px', overflowY: 'auto', border: '1px solid #ccc' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
-                            <tbody>
-                            {filteredShifts.length === 0 ? (
-                                <tr><td colSpan={5} style={{ textAlign: 'center' }}>No shifts found for filter.</td></tr>
-                            ) : (
-                                filteredShifts.map((s, i) => (
-                                    <tr key={i}>
-                                        <td>{s.employee}</td>
-                                        <td>{format(new Date(s.date), 'yyyy-MM-dd')}</td>
-                                        <td>{formatTimeOnly(s.startTime)}</td>
-                                        <td>{formatTimeOnly(s.endTime)}</td>
-                                        <td>{calculateHours(s.date, s.startTime, s.endTime)}</td>
-                                    </tr>
-                                ))
-                            )}
-                            </tbody>
-                        </table>
-                    </div>
-                    <div style={{ marginTop: 8, fontWeight: 'bold' }}>
-                        Total Hours: {totalFilteredHours.toFixed(2)}
                     </div>
                 </div>
-            </div>
+            )}
         </div>
     );
 }
-
