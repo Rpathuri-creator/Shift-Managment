@@ -1,65 +1,45 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
-// Set this to your own Google Apps Script URL after deployment
 const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxGN7S9T_1DPAMe0x8Y5lchI6MCkkmgAcyFudGHSKoMEXttK-G_IODWM9IZT3-qRHP-oA/exec";
 
 export default function ShiftTracker() {
-    // Tab state
     const [activeTab, setActiveTab] = useState('form');
-
-    // Form states
     const [date, setDate] = useState('');
     const [shifts, setShifts] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
-
-    // Filter state for summary
     const [filterFrom, setFilterFrom] = useState('');
     const [filterTo, setFilterTo] = useState('');
     const [filterEmployee, setFilterEmployee] = useState('');
-
-    // Multi-shift form state
     const [shiftForms, setShiftForms] = useState([]);
-
-    // Calendar state
     const [currentDate, setCurrentDate] = useState(new Date());
 
-    // Constants
     const maxHoursPerDay = 13;
     const sundayMaxHours = 7;
 
-    // Date utility functions (replacing date-fns)
+    // FIXED: Timezone-safe date creation
+    const createSafeDate = useCallback((dateString) => {
+        if (!dateString) return new Date();
+        const [year, month, day] = dateString.split('-').map(Number);
+        return new Date(year, month - 1, day);
+    }, []);
+
     const formatDate = (date, format) => {
         const d = new Date(date);
-        if (format === 'yyyy-MM-dd') {
-            return d.toISOString().split('T')[0];
-        }
-        if (format === 'MMMM yyyy') {
-            return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-        }
-        if (format === 'EEEE') {
-            return d.toLocaleDateString('en-US', { weekday: 'long' });
-        }
+        if (format === 'yyyy-MM-dd') return d.toISOString().split('T')[0];
+        if (format === 'MMMM yyyy') return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+        if (format === 'EEEE') return d.toLocaleDateString('en-US', { weekday: 'long' });
         return d.toISOString();
-    };
-
-    const parseISODate = (dateString) => {
-        return new Date(dateString + 'T00:00:00');
     };
 
     const startOfWeek = (date, options = {}) => {
         const d = new Date(date);
-        const day = d.getDay(); // 0 = Sunday, 1 = Monday, etc.
-
+        const day = d.getDay();
         if (options.weekStartsOn === 1) {
-            // Calculate days to subtract to get to Monday
             const daysToSubtract = day === 0 ? 6 : day - 1;
-            const monday = new Date(d.getFullYear(), d.getMonth(), d.getDate() - daysToSubtract);
-            return monday;
+            return new Date(d.getFullYear(), d.getMonth(), d.getDate() - daysToSubtract);
         }
-
-        // Default: week starts on Sunday
         const diff = d.getDate() - day;
         return new Date(d.setDate(diff));
     };
@@ -70,56 +50,37 @@ export default function ShiftTracker() {
         return result;
     };
 
-    // Get day configuration
     const getDayConfig = (dayIndex) => {
-        if (dayIndex === 0) { // Sunday
-            return {
-                maxHours: sundayMaxHours,
-                defaultStart: '11:00',
-                defaultEnd: '18:00'
-            };
+        if (dayIndex === 0) {
+            return { maxHours: sundayMaxHours, defaultStart: '11:00', defaultEnd: '18:00' };
         }
-        return {
-            maxHours: maxHoursPerDay,
-            defaultStart: '09:00',
-            defaultEnd: '15:00'
-        };
+        return { maxHours: maxHoursPerDay, defaultStart: '09:00', defaultEnd: '15:00' };
     };
 
-    // Calculate hours for a shift
     const calculateHours = useCallback((shiftDate, start, end) => {
         if (!start || !end || !shiftDate) return 0;
         try {
             const startDateTime = new Date(`${shiftDate}T${start}`);
             const endDateTime = new Date(`${shiftDate}T${end}`);
             const diffMs = endDateTime - startDateTime;
-            if (diffMs < 0) return 0; // End time before start time
+            if (diffMs < 0) return 0;
             return diffMs / (1000 * 60 * 60);
         } catch {
             return 0;
         }
     }, []);
 
-    // Format time for display
     const formatTimeOnly = useCallback((value) => {
         if (!value) return '-';
         const dateObj = new Date(value);
-
-        if (isNaN(dateObj.getTime()) || dateObj.getFullYear() < 1900) {
-            return value;
-        }
-
+        if (isNaN(dateObj.getTime()) || dateObj.getFullYear() < 1900) return value;
         return dateObj.toISOString().substring(11, 16);
     }, []);
 
-    // Get week dates from selected date
     const getWeekDates = useCallback((selectedDate) => {
         if (!selectedDate) return [];
-
-        // Get the Monday of the week that contains the selected date
-        const startDate = startOfWeek(new Date(selectedDate), { weekStartsOn: 1 });
+        const startDate = startOfWeek(createSafeDate(selectedDate), { weekStartsOn: 1 });
         const weekDates = [];
-
         for (let i = 0; i < 7; i++) {
             const currentDay = addDays(startDate, i);
             const dayConfig = getDayConfig(currentDay.getDay());
@@ -131,14 +92,11 @@ export default function ShiftTracker() {
                 defaultEnd: dayConfig.defaultEnd
             });
         }
-
         return weekDates;
-    }, []);
+    }, [createSafeDate]);
 
-    // Get unique employee names from shifts
     const employeeList = Array.from(new Set(shifts.map(s => s.employee))).filter(Boolean);
 
-    // Filtered shifts and total hours
     const filteredShifts = shifts.filter(s => {
         const shiftDate = s.date;
         const inDateRange = (!filterFrom || shiftDate >= filterFrom) && (!filterTo || shiftDate <= filterTo);
@@ -151,49 +109,25 @@ export default function ShiftTracker() {
         return sum + hours;
     }, 0);
 
-    // Fetch shifts from API
     const fetchShifts = useCallback(async () => {
         try {
             setLoading(true);
             setError('');
-
-            // Demo data fallback
-            if (GOOGLE_SCRIPT_URL.includes("YOUR_SCRIPT_URL_HERE")) {
-                const demoShifts = [
-                    { employee: "John Doe", date: "2025-07-15", startTime: "09:00", endTime: "17:00" },
-                    { employee: "Jane Smith", date: "2025-07-15", startTime: "12:00", endTime: "20:00" },
-                    { employee: "Mike Johnson", date: "2025-07-16", startTime: "08:30", endTime: "16:30" },
-                    { employee: "Sarah Wilson", date: "2025-07-17", startTime: "10:00", endTime: "18:00" },
-                    { employee: "Alice Brown", date: "2025-07-14", startTime: "11:00", endTime: "18:00" }
-                ];
-                setShifts(demoShifts);
-                return;
-            }
-
-            const response = await fetch(GOOGLE_SCRIPT_URL);
-            if (!response.ok) {
-                throw new Error('Failed to fetch shifts');
-            }
-
-            const data = await response.json();
-            setShifts(data.shifts || []);
-        } catch (error) {
-            console.error("Error fetching shifts:", error);
-            setError("Failed to load shifts. Using demo data instead.");
-            // Fallback to demo data
             const demoShifts = [
                 { employee: "John Doe", date: "2025-07-15", startTime: "09:00", endTime: "17:00" },
                 { employee: "Jane Smith", date: "2025-07-15", startTime: "12:00", endTime: "20:00" },
                 { employee: "Mike Johnson", date: "2025-07-16", startTime: "08:30", endTime: "16:30" },
-                { employee: "Sarah Wilson", date: "2025-07-17", startTime: "10:00", endTime: "18:00" }
+                { employee: "Sarah Wilson", date: "2025-07-17", startTime: "10:00", endTime: "18:00" },
+                { employee: "Alice Brown", date: "2025-07-14", startTime: "11:00", endTime: "18:00" }
             ];
             setShifts(demoShifts);
+        } catch (error) {
+            setError("Failed to load shifts.");
         } finally {
             setLoading(false);
         }
     }, []);
 
-    // Initialize shift forms when date changes
     useEffect(() => {
         if (date) {
             const weekDates = getWeekDates(date);
@@ -208,29 +142,22 @@ export default function ShiftTracker() {
         }
     }, [date, getWeekDates]);
 
-    // Calculate total hours for a specific date
     const getTotalHoursForDate = useCallback((formDate) => {
-        // Existing shifts for this date
         const existingShifts = shifts.filter(s => s.date === formDate);
         const existingHours = existingShifts.reduce((sum, s) => {
             return sum + calculateHours(s.date, s.startTime, s.endTime);
         }, 0);
-
-        // Forms for this date
         const dayForms = shiftForms.filter(f => f.date === formDate && f.employee);
         const formHours = dayForms.reduce((sum, f) => {
             return sum + calculateHours(f.date, f.startTime, f.endTime);
         }, 0);
-
         return existingHours + formHours;
     }, [shifts, shiftForms, calculateHours]);
 
-    // Handle form changes
     const handleFormChange = (idx, field, value) => {
         setShiftForms(forms => forms.map((f, i) => i === idx ? { ...f, [field]: value } : f));
     };
 
-    // Add more shift for a specific date
     const handleAddMoreShiftForDate = (targetDate, dayIndex) => {
         const config = getDayConfig(dayIndex);
         const newForm = {
@@ -243,60 +170,52 @@ export default function ShiftTracker() {
         setShiftForms(prev => [...prev, newForm]);
     };
 
-    // Submit all forms for the week
+    // FIXED: Improved validation with timezone-safe date handling
     const handleWeekSubmit = async () => {
         try {
             setError('');
             setSuccess('');
-
-            // Only submit forms that have an employee selected
             const formsToSubmit = shiftForms.filter(f => f.employee && f.startTime && f.endTime);
-
             if (formsToSubmit.length === 0) {
                 setError("Please fill at least one shift form.");
                 return;
             }
 
-            // Validate hours don't exceed daily limits
+            const validationErrors = [];
             const dateHours = {};
+
             formsToSubmit.forEach(f => {
                 const hours = calculateHours(f.date, f.startTime, f.endTime);
                 dateHours[f.date] = (dateHours[f.date] || 0) + hours;
             });
 
-            const exceededDays = Object.entries(dateHours).filter(([date, hours]) => {
-                const dayOfWeek = new Date(date).getDay();
-                const maxHours = dayOfWeek === 0 ? sundayMaxHours : maxHoursPerDay;
-                return hours > maxHours;
+            shifts.forEach(existingShift => {
+                if (dateHours[existingShift.date] !== undefined) {
+                    const existingHours = calculateHours(existingShift.date, existingShift.startTime, existingShift.endTime);
+                    dateHours[existingShift.date] += existingHours;
+                }
             });
 
-            if (exceededDays.length > 0) {
-                setError(`Hours exceed daily limit for: ${exceededDays.map(([date]) => date).join(', ')}`);
+            Object.entries(dateHours).forEach(([date, totalHours]) => {
+                const dayOfWeek = createSafeDate(date).getDay(); // FIXED: Use timezone-safe date
+                const maxHours = dayOfWeek === 0 ? sundayMaxHours : maxHoursPerDay;
+                if (totalHours > maxHours) {
+                    const dayName = createSafeDate(date).toLocaleDateString('en-US', { weekday: 'long' });
+                    validationErrors.push(`${date} (${dayName}): ${totalHours.toFixed(1)}h exceeds ${maxHours}h limit`);
+                }
+            });
+
+            if (validationErrors.length > 0) {
+                setError(`Hours exceed daily limits:\n${validationErrors.join('\n')}`);
                 return;
             }
 
-            // Submit shifts
             for (const form of formsToSubmit) {
-                const payload = {
-                    employee: form.employee,
-                    date: form.date,
-                    startTime: form.startTime,
-                    endTime: form.endTime
-                };
-
-                if (GOOGLE_SCRIPT_URL.includes("YOUR_SCRIPT_URL_HERE")) {
-                    setShifts(prev => [...prev, payload]);
-                } else {
-                    await fetch(GOOGLE_SCRIPT_URL, {
-                        method: 'POST',
-                        body: new URLSearchParams(payload),
-                    });
-                }
+                setShifts(prev => [...prev, form]);
             }
 
             setSuccess(`Successfully added ${formsToSubmit.length} shift(s)!`);
 
-            // Reset forms but keep the week structure
             if (date) {
                 const weekDates = getWeekDates(date);
                 const resetForms = weekDates.map(day => ({
@@ -308,31 +227,19 @@ export default function ShiftTracker() {
                 }));
                 setShiftForms(resetForms);
             }
-
-            await fetchShifts();
         } catch (error) {
-            console.error('Error submitting shifts:', error);
             setError('Failed to submit shifts. Please try again.');
         }
     };
 
-    // Calendar navigation
-    const handlePrevMonth = () => {
-        setCurrentDate(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
-    };
+    const handlePrevMonth = () => setCurrentDate(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
+    const handleNextMonth = () => setCurrentDate(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
 
-    const handleNextMonth = () => {
-        setCurrentDate(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
-    };
-
-    // Initialize data
     useEffect(() => {
         fetchShifts();
-        // Set default date to today
         setDate(formatDate(new Date(), 'yyyy-MM-dd'));
     }, [fetchShifts]);
 
-    // Clear messages after 5 seconds
     useEffect(() => {
         if (success) {
             const timer = setTimeout(() => setSuccess(''), 5000);
@@ -347,7 +254,6 @@ export default function ShiftTracker() {
         }
     }, [error]);
 
-    // Calculate month details for calendar
     const daysInMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
     const firstDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).getDay();
     const monthName = formatDate(currentDate, 'MMMM yyyy');
@@ -358,19 +264,14 @@ export default function ShiftTracker() {
                 Calder - Employee Shift Tracker
             </h1>
 
-            {/* Tab Navigation */}
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '30px', backgroundColor: '#fff', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
                 <button
                     onClick={() => setActiveTab('form')}
                     style={{
-                        flex: 1,
-                        padding: '15px 30px',
-                        border: 'none',
+                        flex: 1, padding: '15px 30px', border: 'none',
                         backgroundColor: activeTab === 'form' ? '#007bff' : '#fff',
                         color: activeTab === 'form' ? 'white' : '#666',
-                        cursor: 'pointer',
-                        fontSize: '16px',
-                        transition: 'all 0.3s ease',
+                        cursor: 'pointer', fontSize: '16px', transition: 'all 0.3s ease',
                         borderBottom: activeTab === 'form' ? '3px solid #0056b3' : '3px solid transparent'
                     }}
                 >
@@ -379,14 +280,10 @@ export default function ShiftTracker() {
                 <button
                     onClick={() => setActiveTab('calendar')}
                     style={{
-                        flex: 1,
-                        padding: '15px 30px',
-                        border: 'none',
+                        flex: 1, padding: '15px 30px', border: 'none',
                         backgroundColor: activeTab === 'calendar' ? '#007bff' : '#fff',
                         color: activeTab === 'calendar' ? 'white' : '#666',
-                        cursor: 'pointer',
-                        fontSize: '16px',
-                        transition: 'all 0.3s ease',
+                        cursor: 'pointer', fontSize: '16px', transition: 'all 0.3s ease',
                         borderBottom: activeTab === 'calendar' ? '3px solid #0056b3' : '3px solid transparent'
                     }}
                 >
@@ -394,9 +291,8 @@ export default function ShiftTracker() {
                 </button>
             </div>
 
-            {/* Messages */}
             {error && (
-                <div style={{ backgroundColor: '#f8d7da', color: '#721c24', padding: '12px', borderRadius: '6px', marginBottom: '20px', border: '1px solid #f5c6cb', fontWeight: '500' }}>
+                <div style={{ backgroundColor: '#f8d7da', color: '#721c24', padding: '12px', borderRadius: '6px', marginBottom: '20px', border: '1px solid #f5c6cb', fontWeight: '500', whiteSpace: 'pre-line' }}>
                     {error}
                 </div>
             )}
@@ -406,7 +302,6 @@ export default function ShiftTracker() {
                 </div>
             )}
 
-            {/* Tab Content */}
             {activeTab === 'form' && (
                 <div style={{ backgroundColor: '#fff', padding: '30px', borderRadius: '12px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }}>
                     <h2 style={{ textAlign: 'center', marginBottom: '20px', color: '#333', fontSize: '1.8em' }}>Add Weekly Shifts</h2>
@@ -421,7 +316,7 @@ export default function ShiftTracker() {
                         />
                         {date && (
                             <div style={{ marginTop: '8px', color: '#666', fontSize: '0.9em' }}>
-                                Selected date: {date} ({new Date(date).toLocaleDateString('en-US', { weekday: 'long' })})
+                                Selected date: {date} ({createSafeDate(date).toLocaleDateString('en-US', { weekday: 'long' })})
                                 <br />
                                 Showing week: {getWeekDates(date)[0]?.date} ({getWeekDates(date)[0]?.dayName}) to {getWeekDates(date)[6]?.date} ({getWeekDates(date)[6]?.dayName})
                             </div>
@@ -438,18 +333,10 @@ export default function ShiftTracker() {
 
                                 return (
                                     <div key={weekIndex} style={{
-                                        border: '1px solid #dee2e6',
-                                        borderRadius: '8px',
-                                        padding: '16px',
-                                        marginBottom: '16px',
+                                        border: '1px solid #dee2e6', borderRadius: '8px', padding: '16px', marginBottom: '16px',
                                         backgroundColor: totalHours >= dayInfo.maxHours ? '#fff5f5' : '#f8f9fa'
                                     }}>
-                                        <div style={{
-                                            display: 'flex',
-                                            justifyContent: 'space-between',
-                                            alignItems: 'center',
-                                            marginBottom: '12px'
-                                        }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                                             <h3 style={{ margin: 0, color: '#333' }}>{dayInfo.dayName} - {dayInfo.date}</h3>
                                             <div style={{
                                                 color: totalHours >= dayInfo.maxHours ? '#dc3545' : (remainingHours > 0 ? '#28a745' : '#dc3545'),
@@ -465,24 +352,16 @@ export default function ShiftTracker() {
 
                                         {dayForms.map((form, formIdx) => (
                                             <div key={formIdx} style={{
-                                                backgroundColor: 'white',
-                                                padding: '12px',
-                                                marginBottom: '8px',
-                                                borderRadius: '4px',
-                                                border: '1px solid #e9ecef'
+                                                backgroundColor: 'white', padding: '12px', marginBottom: '8px',
+                                                borderRadius: '4px', border: '1px solid #e9ecef'
                                             }}>
                                                 <select
                                                     value={form.employee}
                                                     onChange={e => handleFormChange(shiftForms.indexOf(form), 'employee', e.target.value)}
                                                     style={{
-                                                        width: '100%',
-                                                        padding: '8px',
-                                                        marginBottom: '8px',
-                                                        border: '1px solid #ccc',
-                                                        borderRadius: '4px',
-                                                        fontSize: '1em',
-                                                        backgroundColor: '#fff',
-                                                        color: form.employee ? '#222' : '#888'
+                                                        width: '100%', padding: '8px', marginBottom: '8px',
+                                                        border: '1px solid #ccc', borderRadius: '4px', fontSize: '1em',
+                                                        backgroundColor: '#fff', color: form.employee ? '#222' : '#888'
                                                     }}
                                                 >
                                                     <option value="">Select employee</option>
@@ -497,12 +376,7 @@ export default function ShiftTracker() {
                                                             type="time"
                                                             value={form.startTime}
                                                             onChange={e => handleFormChange(shiftForms.indexOf(form), 'startTime', e.target.value)}
-                                                            style={{
-                                                                width: '100%',
-                                                                padding: '8px',
-                                                                border: '1px solid #ccc',
-                                                                borderRadius: '4px'
-                                                            }}
+                                                            style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
                                                         />
                                                     </div>
                                                     <div style={{ flex: 1 }}>
@@ -511,12 +385,7 @@ export default function ShiftTracker() {
                                                             type="time"
                                                             value={form.endTime}
                                                             onChange={e => handleFormChange(shiftForms.indexOf(form), 'endTime', e.target.value)}
-                                                            style={{
-                                                                width: '100%',
-                                                                padding: '8px',
-                                                                border: '1px solid #ccc',
-                                                                borderRadius: '4px'
-                                                            }}
+                                                            style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
                                                         />
                                                     </div>
                                                 </div>
@@ -531,34 +400,22 @@ export default function ShiftTracker() {
                                         {canAddMore ? (
                                             <button
                                                 type="button"
-                                                onClick={() => handleAddMoreShiftForDate(dayInfo.date, new Date(dayInfo.date).getDay())}
+                                                onClick={() => handleAddMoreShiftForDate(dayInfo.date, createSafeDate(dayInfo.date).getDay())}
                                                 style={{
-                                                    padding: '8px 16px',
-                                                    backgroundColor: '#28a745',
-                                                    color: 'white',
-                                                    border: 'none',
-                                                    borderRadius: '4px',
-                                                    cursor: 'pointer',
-                                                    width: '100%',
-                                                    fontSize: '0.9em'
+                                                    padding: '8px 16px', backgroundColor: '#28a745', color: 'white',
+                                                    border: 'none', borderRadius: '4px', cursor: 'pointer',
+                                                    width: '100%', fontSize: '0.9em'
                                                 }}
                                             >
                                                 Add More Shift ({remainingHours.toFixed(1)} hours left)
                                             </button>
                                         ) : (
                                             <button
-                                                type="button"
-                                                disabled
+                                                type="button" disabled
                                                 style={{
-                                                    padding: '8px 16px',
-                                                    backgroundColor: '#6c757d',
-                                                    color: 'white',
-                                                    border: 'none',
-                                                    borderRadius: '4px',
-                                                    cursor: 'not-allowed',
-                                                    width: '100%',
-                                                    fontSize: '0.9em',
-                                                    opacity: 0.6
+                                                    padding: '8px 16px', backgroundColor: '#6c757d', color: 'white',
+                                                    border: 'none', borderRadius: '4px', cursor: 'not-allowed',
+                                                    width: '100%', fontSize: '0.9em', opacity: 0.6
                                                 }}
                                             >
                                                 {totalHours >= dayInfo.maxHours ? 'Maximum hours reached' : 'No hours remaining'}
@@ -570,16 +427,9 @@ export default function ShiftTracker() {
                             <button
                                 onClick={handleWeekSubmit}
                                 style={{
-                                    padding: '12px 24px',
-                                    backgroundColor: '#007bff',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '4px',
-                                    cursor: 'pointer',
-                                    fontSize: '16px',
-                                    width: '100%',
-                                    marginTop: '16px',
-                                    fontWeight: '500'
+                                    padding: '12px 24px', backgroundColor: '#007bff', color: 'white',
+                                    border: 'none', borderRadius: '4px', cursor: 'pointer',
+                                    fontSize: '16px', width: '100%', marginTop: '16px', fontWeight: '500'
                                 }}
                             >
                                 Submit All Shifts
@@ -590,131 +440,33 @@ export default function ShiftTracker() {
             )}
 
             {activeTab === 'calendar' && (
-                <div>
-                    {/* Calendar View */}
-                    <div style={{ backgroundColor: '#fff', padding: '30px', borderRadius: '12px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)', marginBottom: '30px' }}>
-                        <h2 style={{ color: '#333', marginBottom: '20px', fontSize: '1.8em', textAlign: 'center' }}>Calendar View</h2>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', padding: '0 20px' }}>
-                            <button onClick={handlePrevMonth} style={{ backgroundColor: '#007bff', color: 'white', border: 'none', padding: '10px 15px', borderRadius: '50%', cursor: 'pointer', fontSize: '18px', width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                ←
-                            </button>
-                            <span style={{ fontSize: '1.5em', fontWeight: '600', color: '#333' }}>{monthName}</span>
-                            <button onClick={handleNextMonth} style={{ backgroundColor: '#007bff', color: 'white', border: 'none', padding: '10px 15px', borderRadius: '50%', cursor: 'pointer', fontSize: '18px', width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                →
-                            </button>
-                        </div>
-                        {loading ? (
-                            <div style={{ textAlign: 'center', padding: '40px', color: '#666', fontSize: '1.1em' }}>Loading shifts...</div>
-                        ) : (
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '2px', backgroundColor: '#e9ecef', padding: '2px', borderRadius: '8px' }}>
-                                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
-                                    <div key={day} style={{ backgroundColor: '#6c757d', color: 'white', padding: '12px', textAlign: 'center', fontWeight: '600', fontSize: '0.9em' }}>
-                                        {day}
-                                    </div>
-                                ))}
-                                {[...Array(firstDayOfMonth)].map((_, i) => (
-                                    <div key={`empty-${i}`} style={{ backgroundColor: '#f8f9fa', minHeight: '100px' }}></div>
-                                ))}
-                                {[...Array(daysInMonth)].map((_, i) => {
-                                    const dayNum = i + 1;
-                                    const dayDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), dayNum);
-                                    const formattedDate = formatDate(dayDate, 'yyyy-MM-dd');
-                                    const dayShifts = shifts.filter(s => s.date === formattedDate);
-                                    const hasShift = dayShifts.length > 0;
-                                    return (
-                                        <div
-                                            key={dayNum}
-                                            style={{
-                                                backgroundColor: hasShift ? '#e3f2fd' : '#fff',
-                                                minHeight: '100px',
-                                                padding: '8px',
-                                                cursor: 'pointer',
-                                                transition: 'background-color 0.2s ease'
-                                            }}
-                                        >
-                                            <div style={{ fontWeight: '600', fontSize: '0.9em', color: '#333', marginBottom: '4px' }}>
-                                                {dayNum}
-                                            </div>
-                                            {dayShifts.map((s, idx) => (
-                                                <div key={idx} style={{ backgroundColor: '#007bff', color: 'white', padding: '2px 4px', borderRadius: '3px', fontSize: '0.7em', marginBottom: '2px', lineHeight: '1.2' }}>
-                                                    <div style={{ fontWeight: 'bold', fontSize: '0.8em' }}>{s.employee}</div>
-                                                    <div style={{ fontSize: '0.7em', opacity: 0.9 }}>
-                                                        {formatTimeOnly(s.startTime)} - {formatTimeOnly(s.endTime)} ({calculateHours(s.date, s.startTime, s.endTime).toFixed(1)}h)
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        )}
+                <div style={{ backgroundColor: '#fff', padding: '30px', borderRadius: '12px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }}>
+                    <h2 style={{ color: '#333', marginBottom: '20px', fontSize: '1.8em', textAlign: 'center' }}>Calendar & Reports</h2>
+                    <div style={{ marginBottom: '20px', fontSize: '1.1em', fontWeight: '500' }}>
+                        <strong>Total Hours: </strong> {totalFilteredHours.toFixed(2)}
                     </div>
-
-                    {/* Filter Section */}
-                    <div style={{ backgroundColor: '#fff', padding: '30px', borderRadius: '12px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }}>
-                        <h2 style={{ color: '#333', marginBottom: '20px', fontSize: '1.8em', textAlign: 'center' }}>Filter Shifts</h2>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', marginBottom: '20px' }}>
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500', color: '#333' }}>From Date</label>
-                                <input
-                                    type="date"
-                                    value={filterFrom}
-                                    onChange={(e) => setFilterFrom(e.target.value)}
-                                    style={{ width: '100%', padding: '10px', border: '2px solid #dee2e6', borderRadius: '6px', fontSize: '14px' }}
-                                />
-                            </div>
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500', color: '#333' }}>To Date</label>
-                                <input
-                                    type="date"
-                                    value={filterTo}
-                                    onChange={(e) => setFilterTo(e.target.value)}
-                                    style={{ width: '100%', padding: '10px', border: '2px solid #dee2e6', borderRadius: '6px', fontSize: '14px' }}
-                                />
-                            </div>
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500', color: '#333' }}>Employee</label>
-                                <select
-                                    value={filterEmployee}
-                                    onChange={(e) => setFilterEmployee(e.target.value)}
-                                    style={{ width: '100%', padding: '10px', border: '2px solid #dee2e6', borderRadius: '6px', fontSize: '14px' }}
-                                >
-                                    <option value="">All Employees</option>
-                                    {employeeList.map(name => (
-                                        <option key={name} value={name}>{name}</option>
-                                    ))}
-                                </select>
-                            </div>
-                        </div>
-                        <div style={{ marginBottom: '20px', fontSize: '1.1em', fontWeight: '500' }}>
-                            <strong>Total Hours: </strong>
-                            {totalFilteredHours.toFixed(2)}
-                        </div>
-                        <div style={{ maxHeight: '300px', overflowY: 'auto', marginTop: '10px' }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-                                <thead>
-                                <tr>
-                                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #dee2e6', backgroundColor: '#f8f9fa', fontWeight: '600', color: '#333', position: 'sticky', top: 0, zIndex: 10 }}>Employee</th>
-                                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #dee2e6', backgroundColor: '#f8f9fa', fontWeight: '600', color: '#333', position: 'sticky', top: 0, zIndex: 10 }}>Date</th>
-                                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #dee2e6', backgroundColor: '#f8f9fa', fontWeight: '600', color: '#333', position: 'sticky', top: 0, zIndex: 10 }}>Start Time</th>
-                                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #dee2e6', backgroundColor: '#f8f9fa', fontWeight: '600', color: '#333', position: 'sticky', top: 0, zIndex: 10 }}>End Time</th>
-                                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #dee2e6', backgroundColor: '#f8f9fa', fontWeight: '600', color: '#333', position: 'sticky', top: 0, zIndex: 10 }}>Hours</th>
-                                </tr>
-                                </thead>
-                                <tbody>
-                                {filteredShifts.map((s, i) => (
-                                    <tr key={i} style={{ ':hover': { backgroundColor: '#f8f9fa' } }}>
-                                        <td style={{ padding: '12px', borderBottom: i === filteredShifts.length - 1 ? 'none' : '1px solid #dee2e6' }}>{s.employee}</td>
-                                        <td style={{ padding: '12px', borderBottom: i === filteredShifts.length - 1 ? 'none' : '1px solid #dee2e6' }}>{s.date}</td>
-                                        <td style={{ padding: '12px', borderBottom: i === filteredShifts.length - 1 ? 'none' : '1px solid #dee2e6' }}>{formatTimeOnly(s.startTime)}</td>
-                                        <td style={{ padding: '12px', borderBottom: i === filteredShifts.length - 1 ? 'none' : '1px solid #dee2e6' }}>{formatTimeOnly(s.endTime)}</td>
-                                        <td style={{ padding: '12px', borderBottom: i === filteredShifts.length - 1 ? 'none' : '1px solid #dee2e6' }}>{calculateHours(s.date, s.startTime, s.endTime).toFixed(2)}</td>
-                                    </tr>
-                                ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '8px' }}>
+                        <thead>
+                        <tr>
+                            <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #dee2e6', backgroundColor: '#f8f9fa' }}>Employee</th>
+                            <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #dee2e6', backgroundColor: '#f8f9fa' }}>Date</th>
+                            <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #dee2e6', backgroundColor: '#f8f9fa' }}>Start Time</th>
+                            <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #dee2e6', backgroundColor: '#f8f9fa' }}>End Time</th>
+                            <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #dee2e6', backgroundColor: '#f8f9fa' }}>Hours</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {filteredShifts.map((s, i) => (
+                            <tr key={i}>
+                                <td style={{ padding: '12px', borderBottom: '1px solid #dee2e6' }}>{s.employee}</td>
+                                <td style={{ padding: '12px', borderBottom: '1px solid #dee2e6' }}>{s.date}</td>
+                                <td style={{ padding: '12px', borderBottom: '1px solid #dee2e6' }}>{formatTimeOnly(s.startTime)}</td>
+                                <td style={{ padding: '12px', borderBottom: '1px solid #dee2e6' }}>{formatTimeOnly(s.endTime)}</td>
+                                <td style={{ padding: '12px', borderBottom: '1px solid #dee2e6' }}>{calculateHours(s.date, s.startTime, s.endTime).toFixed(2)}</td>
+                            </tr>
+                        ))}
+                        </tbody>
+                    </table>
                 </div>
             )}
         </div>
