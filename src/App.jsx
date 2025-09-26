@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw_iJYRavdQ9hQSf05ohhU2nuHcJPlvf2jCA1e0KZuExuZHh__AxnhiBjpMim2yy-3W3w/exec";
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyWmW-dXwf4HtL-YEDpxI-wUFrAOCZmKYS6ghDR-Ip-GBAV9E29vxnkrWY8EVVUVoNjQg/exec";
 
 export default function ShiftTracker() {
     const [activeTab, setActiveTab] = useState('form');
