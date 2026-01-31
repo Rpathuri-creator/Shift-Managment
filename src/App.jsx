@@ -29,6 +29,57 @@ export default function ShiftTracker() {
     const maxHoursPerDay = 13;
     const sundayMaxHours = 7;
 
+    // Normalize time to ensure two-digit format (HH:MM)
+    const normalizeTime = (timeString) => {
+        if (!timeString) return '';
+        const parts = timeString.split(':');
+        if (parts.length !== 2) return timeString;
+        const hours = parts[0].padStart(2, '0');
+        const minutes = parts[1].padStart(2, '0');
+        return `${hours}:${minutes}`;
+    };
+
+    // Get the next shift times based on existing shifts for a date
+    const getNextShiftTimes = (targetDate, existingForms) => {
+        const dayOfWeek = createSafeDate(targetDate).getDay();
+        const isSunday = dayOfWeek === 0;
+
+        // Get all existing shifts for this date from saved shifts
+        const savedShiftsForDate = shifts.filter(s => s.date === targetDate);
+
+        // Get all forms for this date that have times filled (even if employee not selected)
+        const formsWithTimesForDate = existingForms.filter(f =>
+            f.date === targetDate && f.startTime && f.endTime
+        );
+
+        // Combine both sources
+        const allShiftsForDate = [...savedShiftsForDate, ...formsWithTimesForDate];
+
+        if (allShiftsForDate.length === 0) {
+            // First shift - use defaults
+            if (isSunday) {
+                return { startTime: '11:00', endTime: '18:00' };
+            } else {
+                return { startTime: '09:00', endTime: '22:00' };
+            }
+        }
+
+        // Find the latest end time
+        let latestEndTime = null;
+        allShiftsForDate.forEach(shift => {
+            const endTime = normalizeTime(shift.endTime);
+            if (!latestEndTime || endTime > latestEndTime) {
+                latestEndTime = endTime;
+            }
+        });
+
+        // Next shift starts when the last one ended
+        const startTime = latestEndTime;
+        const endTime = isSunday ? '18:00' : '22:00';
+
+        return { startTime, endTime };
+    };
+
     // Fetch employees from existing shifts in Google Sheets
     const fetchEmployees = useCallback(async () => {
         try {
@@ -123,14 +174,16 @@ export default function ShiftTracker() {
         if (dayIndex === 0) {
             return { maxHours: sundayMaxHours, defaultStart: '11:00', defaultEnd: '18:00' };
         }
-        return { maxHours: maxHoursPerDay, defaultStart: '09:00', defaultEnd: '15:00' };
+        return { maxHours: maxHoursPerDay, defaultStart: '09:00', defaultEnd: '22:00' };
     };
 
     const calculateHours = useCallback((shiftDate, start, end) => {
         if (!start || !end || !shiftDate) return 0;
         try {
-            const startDateTime = new Date(`${shiftDate}T${start}`);
-            const endDateTime = new Date(`${shiftDate}T${end}`);
+            const normalizedStart = normalizeTime(start);
+            const normalizedEnd = normalizeTime(end);
+            const startDateTime = new Date(`${shiftDate}T${normalizedStart}`);
+            const endDateTime = new Date(`${shiftDate}T${normalizedEnd}`);
             const diffMs = endDateTime - startDateTime;
             if (diffMs < 0) return 0;
             return diffMs / (1000 * 60 * 60);
@@ -142,8 +195,10 @@ export default function ShiftTracker() {
     const formatTimeOnly = useCallback((value) => {
         if (!value) return '-';
         const dateObj = new Date(value);
-        if (isNaN(dateObj.getTime()) || dateObj.getFullYear() < 1900) return value;
-        return dateObj.toISOString().substring(11, 16);
+        if (isNaN(dateObj.getTime()) || dateObj.getFullYear() < 1900) {
+            return normalizeTime(value);
+        }
+        return normalizeTime(dateObj.toISOString().substring(11, 16));
     }, []);
 
     const getWeekDates = useCallback((selectedDate) => {
@@ -168,9 +223,11 @@ export default function ShiftTracker() {
     const handleCalendarCellClick = (formattedDate, dayShifts) => {
         setEditingDate(formattedDate);
 
-        // Convert existing shifts to editable forms
+        // Convert existing shifts to editable forms with normalized times
         const forms = dayShifts.map(shift => ({
             ...shift,
+            startTime: normalizeTime(shift.startTime),
+            endTime: normalizeTime(shift.endTime),
             isExisting: true
         }));
 
@@ -180,12 +237,12 @@ export default function ShiftTracker() {
         const totalHours = dayShifts.reduce((sum, s) => sum + calculateHours(s.date, s.startTime, s.endTime), 0);
 
         if (totalHours < maxHours) {
-            const config = getDayConfig(dayOfWeek);
+            const nextTimes = getNextShiftTimes(formattedDate, forms);
             forms.push({
                 employee: '',
                 date: formattedDate,
-                startTime: config.defaultStart,
-                endTime: config.defaultEnd,
+                startTime: nextTimes.startTime,
+                endTime: nextTimes.endTime,
                 notes: '',
                 isExisting: false
             });
@@ -202,8 +259,15 @@ export default function ShiftTracker() {
             setSuccess('');
             setIsSavingEdits(true);
 
+            // Normalize times in all forms before validation
+            const normalizedForms = editForms.map(f => ({
+                ...f,
+                startTime: normalizeTime(f.startTime),
+                endTime: normalizeTime(f.endTime)
+            }));
+
             // Validate forms
-            const validForms = editForms.filter(f => f.employee && f.startTime && f.endTime);
+            const validForms = normalizedForms.filter(f => f.employee && f.startTime && f.endTime);
             if (validForms.length === 0) {
                 setError("At least one shift must be filled out.");
                 return;
@@ -226,7 +290,7 @@ export default function ShiftTracker() {
                 // Remove existing shifts for this date
                 const filteredShifts = newShifts.filter(s => s.date !== editingDate);
 
-                // Add all valid forms as shifts
+                // Add all valid forms as shifts with normalized times
                 validForms.forEach(form => {
                     if (!form.isExisting || form.employee) {
                         filteredShifts.push({
@@ -321,7 +385,13 @@ export default function ShiftTracker() {
             }
 
             const data = await response.json();
-            setShifts(data.shifts || []);
+            // Normalize times when fetching
+            const normalizedShifts = (data.shifts || []).map(shift => ({
+                ...shift,
+                startTime: normalizeTime(shift.startTime),
+                endTime: normalizeTime(shift.endTime)
+            }));
+            setShifts(normalizedShifts);
         } catch (error) {
             console.error("Error fetching shifts:", error);
             setError("Failed to load shifts from Google Apps Script. Starting with empty data.");
@@ -359,24 +429,40 @@ export default function ShiftTracker() {
     }, [shifts, shiftForms, calculateHours]);
 
     const handleFormChange = (idx, field, value) => {
-        setShiftForms(forms => forms.map((f, i) => i === idx ? { ...f, [field]: value } : f));
+        setShiftForms(forms => forms.map((f, i) => {
+            if (i === idx) {
+                const updatedForm = { ...f, [field]: field === 'startTime' || field === 'endTime' ? normalizeTime(value) : value };
+                return updatedForm;
+            }
+            return f;
+        }));
     };
 
     const handleEditFormChange = (idx, field, value) => {
-        setEditForms(forms => forms.map((f, i) => i === idx ? { ...f, [field]: value } : f));
+        setEditForms(forms => forms.map((f, i) => {
+            if (i === idx) {
+                const updatedForm = { ...f, [field]: field === 'startTime' || field === 'endTime' ? normalizeTime(value) : value };
+                return updatedForm;
+            }
+            return f;
+        }));
     };
 
     const handleAddMoreShiftForDate = (targetDate, dayIndex) => {
-        const config = getDayConfig(dayIndex);
-        const newForm = {
-            employee: '',
-            startTime: config.defaultStart,
-            endTime: config.defaultEnd,
-            date: targetDate,
-            maxHours: config.maxHours,
-            notes: ''
-        };
-        setShiftForms(prev => [...prev, newForm]);
+        // Pass current shiftForms to get the next shift times
+        setShiftForms(prev => {
+            const nextTimes = getNextShiftTimes(targetDate, prev);
+            const config = getDayConfig(dayIndex);
+            const newForm = {
+                employee: '',
+                startTime: nextTimes.startTime,
+                endTime: nextTimes.endTime,
+                date: targetDate,
+                maxHours: config.maxHours,
+                notes: ''
+            };
+            return [...prev, newForm];
+        });
     };
 
     const handleWeekSubmit = async () => {
@@ -385,7 +471,14 @@ export default function ShiftTracker() {
             setSuccess('');
             setIsSubmitting(true);
 
-            const formsToSubmit = shiftForms.filter(f => f.employee && f.startTime && f.endTime);
+            // Normalize times before submission
+            const normalizedForms = shiftForms.map(f => ({
+                ...f,
+                startTime: normalizeTime(f.startTime),
+                endTime: normalizeTime(f.endTime)
+            }));
+
+            const formsToSubmit = normalizedForms.filter(f => f.employee && f.startTime && f.endTime);
             if (formsToSubmit.length === 0) {
                 setError("Please fill at least one shift form.");
                 return;
@@ -621,13 +714,12 @@ export default function ShiftTracker() {
 
                     <button
                         onClick={() => {
-                            const dayOfWeek = createSafeDate(editingDate).getDay();
-                            const config = getDayConfig(dayOfWeek);
+                            const nextTimes = getNextShiftTimes(editingDate, editForms);
                             setEditForms(prev => [...prev, {
                                 employee: '',
                                 date: editingDate,
-                                startTime: config.defaultStart,
-                                endTime: config.defaultEnd,
+                                startTime: nextTimes.startTime,
+                                endTime: nextTimes.endTime,
                                 notes: '',
                                 isExisting: false
                             }]);
