@@ -1,0 +1,433 @@
+# Calder — Employee Shift Tracker: Developer Documentation
+
+> Last updated: 2026-02-21
+> Source: `src/App.jsx` (1,207 lines — monolithic single-component architecture)
+
+---
+
+## Table of Contents
+
+1. [Project Overview](#1-project-overview)
+2. [Tech Stack](#2-tech-stack)
+3. [Project Structure](#3-project-structure)
+4. [Architecture Overview](#4-architecture-overview)
+5. [State Management](#5-state-management)
+6. [Data Models](#6-data-models)
+7. [Google Apps Script Backend](#7-google-apps-script-backend)
+8. [Key Business Logic](#8-key-business-logic)
+9. [Component & Feature Breakdown](#9-component--feature-breakdown)
+10. [User Flows](#10-user-flows)
+11. [Styling](#11-styling)
+12. [Scripts & Development](#12-scripts--development)
+13. [Known Limitations & Future Work](#13-known-limitations--future-work)
+
+---
+
+## 1. Project Overview
+
+**Calder** is a React single-page application for managing employee work shifts. It is designed for small teams and integrates with Google Sheets (via Google Apps Script) as its database. It provides:
+
+- Weekly shift entry form
+- Interactive monthly calendar view with click-to-edit
+- Shift filtering and reporting table
+- Employee management
+
+---
+
+## 2. Tech Stack
+
+| Layer | Technology | Version |
+|-------|-----------|---------|
+| UI Framework | React (Hooks) | 19.1.0 |
+| Build Tool | Vite | 7.1.5 |
+| Date Utilities | date-fns | 2.30.0 |
+| Styling | CSS (inline + files) | — |
+| Backend | Google Apps Script | — |
+| Linting | ESLint | 9.25.0 |
+
+No external state management library (no Redux, Zustand, or Context). No routing library.
+
+---
+
+## 3. Project Structure
+
+```
+Shift-Managment/
+├── src/
+│   ├── App.jsx          # Entire application (1,207 lines)
+│   ├── main.jsx         # React bootstrap entry point
+│   ├── App.css          # Legacy component styles
+│   ├── index.css        # Global styles, forms, calendar grid
+│   └── components/
+│       └── Calendar.css # Tab, calendar cell, filter, table styles
+├── public/
+│   └── vite.svg
+├── index.html           # Root HTML with <div id="root">
+├── package.json
+├── vite.config.js
+├── eslint.config.js
+├── tsconfig.json
+└── README.md
+```
+
+---
+
+## 4. Architecture Overview
+
+The app is a **single monolithic component** (`ShiftTracker` in `App.jsx`). There is no component tree — all logic, state, and UI live in one file.
+
+**Navigation** is tab-based (state-driven, no router):
+
+```
+activeTab === 'form'      → "Add Shifts" view
+activeTab === 'calendar'  → "Calendar & Reports" view
+```
+
+**Data flow:**
+
+```
+Google Apps Script (Google Sheets)
+        ↓ GET on mount
+    React state (shifts[])
+        ↑ POST on submit/edit
+    Form inputs → validation → API call → re-fetch
+```
+
+---
+
+## 5. State Management
+
+All state lives in `useState` hooks inside `ShiftTracker`:
+
+```javascript
+// Navigation
+activeTab          // 'form' | 'calendar'
+showEditModal      // boolean — edit modal visibility
+currentDate        // Date — calendar month currently shown
+
+// Shift Data
+shifts             // Shift[] — all shifts fetched from backend
+shiftForms         // FormEntry[] — weekly entry form rows
+editForms          // FormEntry[] — rows inside the edit modal
+
+// Filters (Calendar tab)
+filterFrom         // string (YYYY-MM-DD)
+filterTo           // string (YYYY-MM-DD)
+filterEmployee     // string (partial match)
+
+// Employee
+employees          // string[] — list of known employee names
+newEmployeeName    // string — staging value for new employee input
+showAddEmployee    // boolean — toggle inline add-employee form
+
+// Date Selection
+date               // string (YYYY-MM-DD) — selected week anchor date
+editingDate        // string | null — date open in edit modal
+
+// Feedback
+error              // string — shown in red banner, auto-dismisses after 5s
+success            // string — shown in green banner, auto-dismisses after 5s
+
+// Loading / Async
+loading            // boolean — initial fetch in progress
+isSubmitting       // boolean — weekly form submission in progress
+isSavingEdits      // boolean — edit modal save in progress
+```
+
+---
+
+## 6. Data Models
+
+### Shift (persisted / fetched from backend)
+
+```javascript
+{
+  employee:   string,        // "Jane Smith"
+  date:       string,        // "2026-02-10" (YYYY-MM-DD)
+  startTime:  string,        // "09:00" (HH:MM, 24-hour)
+  endTime:    string,        // "17:00"
+  notes:      string,        // optional free text
+  rowIndex:   number,        // Google Sheets row number (1-indexed) — used for DELETE
+  isExisting: boolean        // true when displayed in edit modal from backend
+}
+```
+
+### FormEntry (weekly form / edit modal row)
+
+```javascript
+{
+  employee:   string,
+  date:       string,        // "YYYY-MM-DD"
+  startTime:  string,
+  endTime:    string,
+  notes:      string,
+  maxHours:   number         // Daily cap for this specific date
+}
+```
+
+### WeekDay (generated by `getWeekDates`)
+
+```javascript
+{
+  date:         string,      // "YYYY-MM-DD"
+  dayName:      string,      // "Monday"
+  maxHours:     number,      // 13 (Mon–Sat) or 7 (Sun)
+  defaultStart: string,      // "09:00" or "11:00" (Sun)
+  defaultEnd:   string       // "22:00" or "18:00" (Sun)
+}
+```
+
+---
+
+## 7. Google Apps Script Backend
+
+### URL (hardcoded in App.jsx)
+
+```javascript
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/.../exec";
+```
+
+To update the backend, change this constant at the top of `App.jsx`.
+
+### API Calls
+
+#### Fetch all shifts (GET)
+
+```javascript
+GET GOOGLE_SCRIPT_URL
+Response: { shifts: Shift[] }
+```
+
+Called on mount and after every edit save.
+
+#### Add a shift (POST)
+
+```javascript
+POST GOOGLE_SCRIPT_URL
+Body (URLSearchParams):
+  employee, date, startTime, endTime, notes
+Response: { result: "success" } | { result: "error", message: string }
+```
+
+#### Delete a shift (POST with method override)
+
+```javascript
+POST GOOGLE_SCRIPT_URL
+Body (URLSearchParams):
+  method: "DELETE"
+  rowIndex: number (string)
+```
+
+No explicit response handling — followed by re-fetch.
+
+### Google Sheet Expected Schema
+
+Sheet name: `Shifts`
+
+| Column A | Column B | Column C | Column D | Column E |
+|----------|----------|----------|----------|----------|
+| Employee | Date | StartTime | EndTime | Notes |
+
+---
+
+## 8. Key Business Logic
+
+### Daily Hour Limits
+
+```javascript
+Monday–Saturday:  max 13 hours/day
+Sunday:           max  7 hours/day
+```
+
+Violations block form submission and show an error banner.
+
+### Hours Calculation
+
+```javascript
+calculateHours(date, startTime, endTime) → number (decimal)
+// e.g., "09:00" to "14:30" → 5.5
+// Returns 0 for invalid/missing times
+```
+
+### Time Normalization
+
+```javascript
+normalizeTime("9:5")  → "09:05"
+normalizeTime("14:0") → "14:00"
+```
+
+Applied before submission and after API fetch.
+
+### Week Calculation
+
+```javascript
+getWeekDates(anyDateInWeek) → WeekDay[7]
+// Week always starts Monday, ends Sunday
+// Used to build the weekly shift entry form
+```
+
+### Next Shift Auto-fill
+
+When a user clicks "Add More Shift" for a day:
+
+```javascript
+getNextShiftTimes(date, existingForms)
+// Finds the latest endTime among shifts for that date
+// New shift starts at that endTime
+// End time defaults: 22:00 (weekdays), 18:00 (Sunday)
+```
+
+### Filtering
+
+```javascript
+shifts
+  .filter(s => s.date >= filterFrom && s.date <= filterTo)
+  .filter(s => s.employee.toLowerCase().includes(filterEmployee.toLowerCase()))
+```
+
+Total hours auto-calculated from filtered results.
+
+---
+
+## 9. Component & Feature Breakdown
+
+### Add Shifts Tab (`activeTab === 'form'`)
+
+1. **Date picker** — select any date; app derives the full Mon–Sun week.
+2. **Weekly grid** — one section per day, each showing:
+   - Employee dropdown (or add-new inline form)
+   - Start/End time pickers
+   - Notes textarea
+   - Calculated hours display
+   - "Add More Shift" button (disabled when daily limit reached)
+3. **Submit button** — validates all forms, POSTs each shift, resets on success.
+
+### Calendar & Reports Tab (`activeTab === 'calendar'`)
+
+1. **Month navigation** — prev/next buttons update `currentDate`.
+2. **Calendar grid** — 7-column grid, blue cells indicate shifts exist.
+3. **Click to edit** — opens `EditModal` for that date.
+4. **Filter controls** — date range + employee dropdown.
+5. **Shift table** — scrollable table of filtered shifts with total hours.
+
+### Edit Modal
+
+Rendered inline inside `App.jsx`. Opened via `handleCalendarCellClick`.
+
+- Shows existing shifts for the clicked date (marked `isExisting: true`)
+- Allows editing employee, times, notes
+- "Add More Shift" respects daily hour limit
+- On save: deletes old shifts by `rowIndex`, then POSTs updated ones
+- On cancel: no changes persisted
+
+### Employee Management
+
+- `employees[]` is populated from the fetched `shifts` (unique employee names)
+- "+ Add" button toggles `showAddEmployee` form
+- New name added to `employees[]` locally; persisted to Sheets on next shift submit
+
+---
+
+## 10. User Flows
+
+### Add a week of shifts
+
+```
+1. Click "Add Shifts" tab
+2. Pick a date → week grid renders
+3. Fill in employee + times for each day
+4. Click "Add More Shift" to add overlapping/subsequent shifts for a day
+5. Click Submit → app POSTs each shift → refreshes data → shows success
+```
+
+### Edit shifts via calendar
+
+```
+1. Click "Calendar & Reports" tab
+2. Navigate to target month
+3. Click a blue (or any) calendar cell
+4. Edit modal opens with that day's shifts
+5. Modify fields, add/remove shifts
+6. Click "Save Changes"
+   → DELETEs old entries by rowIndex
+   → POSTs new/edited entries
+   → Re-fetches all shifts
+   → Closes modal
+```
+
+### Filter and view report
+
+```
+1. "Calendar & Reports" tab
+2. Set From / To date inputs
+3. Select employee from dropdown (optional)
+4. Table updates instantly (client-side filter)
+5. Total hours displayed at top of table
+```
+
+---
+
+## 11. Styling
+
+| File | Responsibility |
+|------|---------------|
+| `index.css` | Global resets, form inputs, calendar grid layout |
+| `App.css` | Legacy styles (mostly overridden by inline styles) |
+| `components/Calendar.css` | Tab bar, calendar cells, filter section, shift table |
+
+Inline styles are used heavily throughout `App.jsx` for dynamic values (colors, widths, conditional formatting).
+
+**Color tokens (informal):**
+
+| Purpose | Value |
+|---------|-------|
+| Primary / blue | `#007bff` |
+| Success / green | `#28a745` |
+| Error / red | `#dc3545` |
+| Text dark | `#333` |
+| Text medium | `#666` |
+| Border | `#dee2e6` |
+| Background light | `#f8f9fa` |
+
+**Mobile breakpoint:** `768px` — time inputs stack, calendar font reduces.
+
+---
+
+## 12. Scripts & Development
+
+```bash
+npm run dev       # Vite dev server at http://localhost:5173
+npm run build     # Production bundle → dist/
+npm run preview   # Serve dist/ locally
+npm run lint      # ESLint check
+```
+
+---
+
+## 13. Known Limitations & Future Work
+
+### Current Limitations
+
+| # | Limitation |
+|---|-----------|
+| 1 | Entire app in one 1,207-line component — hard to maintain |
+| 2 | No frontend authentication |
+| 3 | No local storage — session loss = unsaved in-progress work |
+| 4 | No shift conflict detection (same employee, overlapping times) |
+| 5 | No multi-day or overnight shift support |
+| 6 | No export (CSV, PDF) |
+| 7 | No recurring/template shifts |
+| 8 | Employee list only inferred from existing shifts (no dedicated table) |
+
+### Recommended Next Steps
+
+| Priority | Enhancement |
+|----------|-------------|
+| High | Split `App.jsx` into focused components (`ShiftForm`, `CalendarView`, `EditModal`, `FilterTable`) |
+| High | Add localStorage fallback to survive page refresh during offline use |
+| Medium | Conflict detection: warn when same employee has overlapping shifts |
+| Medium | CSV export for the filtered shift table |
+| Medium | Dedicated employees sheet in Google Sheets with proper CRUD |
+| Low | Login/auth layer (Google OAuth via Firebase or similar) |
+| Low | Recurring shift templates |
+| Low | Email/SMS notifications |
