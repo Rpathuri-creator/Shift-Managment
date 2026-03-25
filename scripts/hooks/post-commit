@@ -1,0 +1,21 @@
+#!/bin/bash
+# ─── post-commit: push gas/ to Apps Script editor after every commit ─────────
+
+ROOT="$(git rev-parse --show-toplevel)"
+
+# Only act if gas/ was touched in this commit
+CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git show --name-only --format="" HEAD 2>/dev/null)
+if ! echo "$CHANGED" | grep -q "^gas/"; then
+  exit 0
+fi
+
+echo ""
+echo "📤  gas/ changed — syncing to Apps Script editor..."
+cd "$ROOT/gas" || exit 1
+
+if clasp push --force; then
+  echo "✅  Apps Script editor updated"
+else
+  echo "❌  clasp push failed — check 'clasp login' and try again"
+  exit 1
+fi

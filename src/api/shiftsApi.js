@@ -8,12 +8,17 @@ export function isLocalMode() {
     );
 }
 
-export async function loadShifts() {
+export async function loadShifts({ year, month } = {}) {
     if (isLocalMode()) {
-        return { shifts: [], employees: [] };
+        return { shifts: [] };
     }
 
-    const response = await fetch(GOOGLE_SCRIPT_URL);
+    let url = GOOGLE_SCRIPT_URL;
+    if (year && month) {
+        url += `?year=${year}&month=${month}`;
+    }
+
+    const response = await fetch(url);
     if (!response.ok) throw new Error('Failed to fetch shifts');
 
     const data = await response.json();
@@ -25,11 +30,17 @@ export async function loadShifts() {
         endTime: normalizeTime(shift.endTime)
     }));
 
-    const employees = Array.from(
-        new Set(shifts.map(s => s.employee).filter(Boolean))
-    ).sort();
+    return { shifts };
+}
 
-    return { shifts, employees };
+export async function loadEmployees() {
+    if (isLocalMode()) return { employees: [] };
+
+    const response = await fetch(`${GOOGLE_SCRIPT_URL}?action=getEmployees`);
+    if (!response.ok) throw new Error('Failed to fetch employees');
+
+    const data = await response.json();
+    return { employees: data.employees || [] };
 }
 
 export async function addShift(payload) {

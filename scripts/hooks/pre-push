@@ -1,0 +1,33 @@
+#!/bin/bash
+# ─── pre-push: push + deploy gas/ to Apps Script on every git push ───────────
+
+ROOT="$(git rev-parse --show-toplevel)"
+DEPLOYMENT_ID="AKfycbxMW0ecBV3a5mFujwT7XIHI_vbqEzjqhhl5D4p8NQPHHR3MIrqC-gXAOzD71V_UIPsrHg"
+
+# Collect all commits being pushed and check if gas/ is among them
+CHANGED=""
+while read LOCAL_REF LOCAL_SHA REMOTE_REF REMOTE_SHA; do
+  if [ "$REMOTE_SHA" = "0000000000000000000000000000000000000000" ]; then
+    # New branch — compare against empty tree
+    CHANGED="$CHANGED $(git diff --name-only 4b825dc642cb6eb9a060e54bf8d69288fbee4904 "$LOCAL_SHA" 2>/dev/null)"
+  else
+    CHANGED="$CHANGED $(git diff --name-only "$REMOTE_SHA" "$LOCAL_SHA" 2>/dev/null)"
+  fi
+done
+
+if ! echo "$CHANGED" | grep -q "gas/"; then
+  exit 0
+fi
+
+COMMIT_MSG=$(git log -1 --pretty='%s')
+
+echo ""
+echo "🚀  gas/ changed — deploying new version to Apps Script..."
+cd "$ROOT/gas" || exit 1
+
+if clasp push --force && clasp deploy --deploymentId "$DEPLOYMENT_ID" --description "Auto-deploy: $COMMIT_MSG"; then
+  echo "✅  Apps Script deployed successfully"
+else
+  echo "❌  Apps Script deploy failed — push aborted"
+  exit 1
+fi

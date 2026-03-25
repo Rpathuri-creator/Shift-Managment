@@ -1,25 +1,59 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useReducer } from 'react';
 import CalendarGrid from './CalendarGrid';
-import ShiftsReport from './ShiftsReport';
 import EditModal from './EditModal';
 import { addShift, deleteShift, isLocalMode } from '../../api/shiftsApi';
 import { normalizeTime, createSafeDate } from '../../utils/dateUtils';
 import { calculateHours, getNextShiftTimes } from '../../utils/shiftUtils';
 import { SUNDAY_MAX_HOURS, MAX_HOURS_PER_DAY } from '../../constants';
 
-export default function CalendarView({ shifts, employees, loading, setError, setSuccess, setShifts, onRefreshShifts }) {
+const modalInitial = { show: false, date: null, forms: [], isSaving: false };
+
+function modalReducer(state, action) {
+    switch (action.type) {
+        case 'OPEN':
+            return { ...state, show: true, date: action.date, forms: action.forms };
+        case 'CLOSE':
+            return modalInitial;
+        case 'CHANGE_FORM':
+            return {
+                ...state,
+                forms: state.forms.map((f, i) => i !== action.idx ? f : {
+                    ...f,
+                    [action.field]: action.field === 'startTime' || action.field === 'endTime'
+                        ? normalizeTime(action.value) : action.value,
+                }),
+            };
+        case 'ADD_FORM':
+            return { ...state, forms: [...state.forms, action.form] };
+        case 'REMOVE_FORM':
+            return { ...state, forms: state.forms.filter((_, i) => i !== action.idx) };
+        case 'SAVING_START':
+            return { ...state, isSaving: true };
+        case 'SAVING_DONE':
+            return { ...state, isSaving: false };
+        default:
+            return state;
+    }
+}
+
+export default function CalendarView({ shifts, employees, loading, setError, setSuccess, setShifts, onLoadMonth, onReloadMonth, role }) {
+    const canEdit = role === 'Admin' || role === 'Manager';
     const [currentDate, setCurrentDate] = useState(new Date());
-    const [showEditModal, setShowEditModal] = useState(false);
-    const [editingDate, setEditingDate] = useState(null);
-    const [editForms, setEditForms] = useState([]);
-    const [isSavingEdits, setIsSavingEdits] = useState(false);
+    const [modal, dispatchModal] = useReducer(modalReducer, modalInitial);
+    const { show: showEditModal, date: editingDate, forms: editForms, isSaving: isSavingEdits } = modal;
+
+    // Load shifts for the displayed month whenever it changes
+    useEffect(() => {
+        const year = currentDate.getFullYear();
+        const month = currentDate.getMonth() + 1;
+        onLoadMonth(year, month);
+    }, [currentDate, onLoadMonth]);
 
     const handlePrevMonth = () => setCurrentDate(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
     const handleNextMonth = () => setCurrentDate(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
 
     const handleCalendarCellClick = (formattedDate, dayShifts) => {
-        setEditingDate(formattedDate);
-
+        if (!canEdit) return;
         const forms = dayShifts.map(shift => ({
             ...shift,
             startTime: normalizeTime(shift.startTime),
@@ -43,41 +77,37 @@ export default function CalendarView({ shifts, employees, loading, setError, set
             });
         }
 
-        setEditForms(forms);
-        setShowEditModal(true);
+        dispatchModal({ type: 'OPEN', date: formattedDate, forms });
     };
 
     const handleEditFormChange = (idx, field, value) => {
-        setEditForms(forms => forms.map((f, i) => {
-            if (i !== idx) return f;
-            return {
-                ...f,
-                [field]: field === 'startTime' || field === 'endTime' ? normalizeTime(value) : value
-            };
-        }));
+        dispatchModal({ type: 'CHANGE_FORM', idx, field, value });
     };
 
     const handleAddShiftToEditModal = () => {
         const nextTimes = getNextShiftTimes(editingDate, editForms, shifts);
-        setEditForms(prev => [...prev, {
-            employee: '',
-            date: editingDate,
-            startTime: nextTimes.startTime,
-            endTime: nextTimes.endTime,
-            notes: '',
-            isExisting: false
-        }]);
+        dispatchModal({
+            type: 'ADD_FORM',
+            form: {
+                employee: '',
+                date: editingDate,
+                startTime: nextTimes.startTime,
+                endTime: nextTimes.endTime,
+                notes: '',
+                isExisting: false
+            }
+        });
     };
 
     const handleRemoveShiftFromEditModal = (idx) => {
-        setEditForms(prev => prev.filter((_, i) => i !== idx));
+        dispatchModal({ type: 'REMOVE_FORM', idx });
     };
 
     const handleSaveEdits = async () => {
         try {
             setError('');
             setSuccess('');
-            setIsSavingEdits(true);
+            dispatchModal({ type: 'SAVING_START' });
 
             const normalizedForms = editForms.map(f => ({
                 ...f,
@@ -131,38 +161,45 @@ export default function CalendarView({ shifts, employees, loading, setError, set
                         });
                     }
                 }
-                await onRefreshShifts();
+                // Reload this month to get fresh row indices after deletes/adds
+                const [year, month] = editingDate.split('-').map(Number);
+                await onReloadMonth(year, month);
             }
 
             setSuccess(`Successfully updated shifts for ${editingDate}!`);
-            setShowEditModal(false);
-            setEditingDate(null);
-            setEditForms([]);
+            dispatchModal({ type: 'CLOSE' });
         } catch {
             setError('Failed to save changes. Please try again.');
         } finally {
-            setIsSavingEdits(false);
+            dispatchModal({ type: 'SAVING_DONE' });
         }
     };
+
+    const visibleYear = currentDate.getFullYear();
+    const visibleMonth = currentDate.getMonth() + 1;
+    const visibleShifts = shifts.filter(s => {
+        if (!s.date) return false;
+        const [y, m] = s.date.split('-').map(Number);
+        return y === visibleYear && m === visibleMonth;
+    });
 
     return (
         <div>
             <CalendarGrid
-                shifts={shifts}
+                shifts={visibleShifts}
                 currentDate={currentDate}
                 onPrevMonth={handlePrevMonth}
                 onNextMonth={handleNextMonth}
                 onCellClick={handleCalendarCellClick}
                 loading={loading}
             />
-            <ShiftsReport shifts={shifts} employees={employees} />
             <EditModal
                 show={showEditModal}
                 editingDate={editingDate}
                 editForms={editForms}
                 employees={employees}
                 isSaving={isSavingEdits}
-                onClose={() => setShowEditModal(false)}
+                onClose={() => dispatchModal({ type: 'CLOSE' })}
                 onFormChange={handleEditFormChange}
                 onAddShift={handleAddShiftToEditModal}
                 onRemoveShift={handleRemoveShiftFromEditModal}
