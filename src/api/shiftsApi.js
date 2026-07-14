@@ -56,3 +56,15 @@ export async function deleteShift(rowIndex) {
     });
     await fetch(GOOGLE_SCRIPT_URL, { method: 'POST', body: deleteData });
 }
+
+export async function updateDeposit(rowIndex, dailyBalance, countedBalance, reason) {
+    if (isLocalMode()) return;
+    const formData = new URLSearchParams({
+        action: 'updateDeposit',
+        rowIndex: rowIndex.toString(),
+        dailyBalance: dailyBalance.toString(),
+        countedBalance: countedBalance.toString(),
+        reason: reason || ''
+    });
+    await fetch(GOOGLE_SCRIPT_URL, { method: 'POST', body: formData });
+}

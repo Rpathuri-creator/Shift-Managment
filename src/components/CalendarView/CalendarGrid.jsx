@@ -4,7 +4,7 @@ import { formatDate } from '../../utils/dateUtils';
 
 const DAY_HEADERS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-export default function CalendarGrid({ shifts, currentDate, onPrevMonth, onNextMonth, onCellClick, loading }) {
+export default function CalendarGrid({ shifts, currentDate, onPrevMonth, onNextMonth, onCellClick, loading, canManageDeposits, onDepositClick }) {
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -80,6 +80,8 @@ export default function CalendarGrid({ shifts, currentDate, onPrevMonth, onNextM
                                 dayNumber={dayNum}
                                 dayShifts={dayShifts}
                                 onClick={() => onCellClick(formattedDate, dayShifts)}
+                                canManageDeposits={canManageDeposits}
+                                onDepositClick={() => onDepositClick(formattedDate, dayShifts)}
                             />
                         );
                     })}

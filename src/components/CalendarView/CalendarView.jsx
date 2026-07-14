@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useReducer } from 'react';
 import CalendarGrid from './CalendarGrid';
 import EditModal from './EditModal';
-import { addShift, deleteShift, isLocalMode } from '../../api/shiftsApi';
+import CashDepositModal from './CashDepositModal';
+import { addShift, deleteShift, updateDeposit, isLocalMode } from '../../api/shiftsApi';
 import { normalizeTime, createSafeDate } from '../../utils/dateUtils';
 import { calculateHours, getNextShiftTimes } from '../../utils/shiftUtils';
 import { SUNDAY_MAX_HOURS, MAX_HOURS_PER_DAY } from '../../constants';
@@ -41,6 +42,9 @@ export default function CalendarView({ shifts, employees, loading, setError, set
     const [currentDate, setCurrentDate] = useState(new Date());
     const [modal, dispatchModal] = useReducer(modalReducer, modalInitial);
     const { show: showEditModal, date: editingDate, forms: editForms, isSaving: isSavingEdits } = modal;
+
+    const depositModalInitial = { show: false, date: null, shifts: [], isSaving: false };
+    const [depositModal, setDepositModal] = useState(depositModalInitial);
 
     // Load shifts for the displayed month whenever it changes
     useEffect(() => {
@@ -140,7 +144,11 @@ export default function CalendarView({ shifts, employees, loading, setError, set
                             date: f.date,
                             startTime: f.startTime,
                             endTime: f.endTime,
-                            notes: f.notes || ''
+                            notes: f.notes || '',
+                            dailyBalance: f.dailyBalance || 0,
+                            countedBalance: f.countedBalance || 0,
+                            difference: (f.countedBalance || 0) - (f.dailyBalance || 0),
+                            reason: f.reason || ''
                         });
                     }
                 });
@@ -157,7 +165,10 @@ export default function CalendarView({ shifts, employees, loading, setError, set
                             date: form.date,
                             startTime: form.startTime,
                             endTime: form.endTime,
-                            notes: form.notes || ''
+                            notes: form.notes || '',
+                            dailyBalance: form.dailyBalance || 0,
+                            countedBalance: form.countedBalance || 0,
+                            reason: form.reason || ''
                         });
                     }
                 }
@@ -172,6 +183,44 @@ export default function CalendarView({ shifts, employees, loading, setError, set
             setError('Failed to save changes. Please try again.');
         } finally {
             dispatchModal({ type: 'SAVING_DONE' });
+        }
+    };
+
+    const handleDepositClick = (formattedDate, dayShifts) => {
+        if (!canEdit) return;
+        setDepositModal({ show: true, date: formattedDate, shifts: dayShifts, isSaving: false });
+    };
+
+    const handleCloseDepositModal = () => {
+        setDepositModal(depositModalInitial);
+    };
+
+    const handleSaveDeposits = async (entries) => {
+        try {
+            setError('');
+            setSuccess('');
+            setDepositModal(prev => ({ ...prev, isSaving: true }));
+
+            if (isLocalMode()) {
+                setShifts(prev => prev.map(s => {
+                    const idx = depositModal.shifts.indexOf(s);
+                    if (idx === -1) return s;
+                    const { dailyBalance, countedBalance, reason } = entries[idx];
+                    return { ...s, dailyBalance, countedBalance, reason, difference: countedBalance - dailyBalance };
+                }));
+            } else {
+                for (const entry of entries) {
+                    await updateDeposit(entry.rowIndex, entry.dailyBalance, entry.countedBalance, entry.reason);
+                }
+                const [year, month] = depositModal.date.split('-').map(Number);
+                await onReloadMonth(year, month);
+            }
+
+            setSuccess(`Updated cash deposits for ${depositModal.date}`);
+            handleCloseDepositModal();
+        } catch {
+            setError('Failed to save cash deposits. Please try again.');
+            setDepositModal(prev => ({ ...prev, isSaving: false }));
         }
     };
 
@@ -192,6 +241,16 @@ export default function CalendarView({ shifts, employees, loading, setError, set
                 onNextMonth={handleNextMonth}
                 onCellClick={handleCalendarCellClick}
                 loading={loading}
+                canManageDeposits={canEdit}
+                onDepositClick={handleDepositClick}
+            />
+            <CashDepositModal
+                show={depositModal.show}
+                date={depositModal.date}
+                shifts={depositModal.shifts}
+                isSaving={depositModal.isSaving}
+                onClose={handleCloseDepositModal}
+                onSave={handleSaveDeposits}
             />
             <EditModal
                 show={showEditModal}
