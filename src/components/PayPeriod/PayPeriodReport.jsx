@@ -6,47 +6,55 @@ const MONTH_NAMES = [
     'July', 'August', 'September', 'October', 'November', 'December'
 ];
 
+function addMonths(year, month, delta) {
+    const total = month - 1 + delta;
+    const y = year + Math.floor(total / 12);
+    const m = ((total % 12) + 12) % 12;
+    return { year: y, month: m + 1 };
+}
+
 function getPeriods(today) {
     const year = today.getFullYear();
     const month = today.getMonth() + 1;
     const day = today.getDate();
 
-    const lastOfMonth = new Date(year, today.getMonth() + 1, 0).getDate();
-    const prevMonth = month === 1 ? 12 : month - 1;
-    const prevYear = month === 1 ? year - 1 : year;
-    const lastOfPrevMonth = new Date(prevYear, prevMonth, 0).getDate();
-
     const pad = n => String(n).padStart(2, '0');
 
-    if (day <= 14) {
+    // "Mid" period: 11th–25th of a single month.
+    const mid = (y, m) => ({
+        start: `${y}-${pad(m)}-11`,
+        end:   `${y}-${pad(m)}-25`,
+        label: `${MONTH_NAMES[m - 1]} 11–25`,
+        months: [{ year: y, month: m }]
+    });
+
+    // "Wrap" period: 26th of month (y, m) through the 10th of the following month.
+    const wrap = (y, m) => {
+        const next = addMonths(y, m, 1);
         return {
-            current: {
-                start: `${year}-${pad(month)}-01`,
-                end:   `${year}-${pad(month)}-14`,
-                label: `${MONTH_NAMES[month - 1]} 1–14`,
-                year, month
-            },
-            previous: {
-                start: `${prevYear}-${pad(prevMonth)}-15`,
-                end:   `${prevYear}-${pad(prevMonth)}-${lastOfPrevMonth}`,
-                label: `${MONTH_NAMES[prevMonth - 1]} 15–${lastOfPrevMonth}`,
-                year: prevYear, month: prevMonth
-            }
+            start: `${y}-${pad(m)}-26`,
+            end:   `${next.year}-${pad(next.month)}-10`,
+            label: `${MONTH_NAMES[m - 1]} 26 – ${MONTH_NAMES[next.month - 1]} 10`,
+            months: [{ year: y, month: m }, { year: next.year, month: next.month }]
+        };
+    };
+
+    if (day >= 11 && day <= 25) {
+        const prev = addMonths(year, month, -1);
+        return {
+            current: mid(year, month),
+            previous: wrap(prev.year, prev.month)
+        };
+    } else if (day >= 26) {
+        return {
+            current: wrap(year, month),
+            previous: mid(year, month)
         };
     } else {
+        const prev = addMonths(year, month, -1);
         return {
-            current: {
-                start: `${year}-${pad(month)}-15`,
-                end:   `${year}-${pad(month)}-${lastOfMonth}`,
-                label: `${MONTH_NAMES[month - 1]} 15–${lastOfMonth}`,
-                year, month
-            },
-            previous: {
-                start: `${year}-${pad(month)}-01`,
-                end:   `${year}-${pad(month)}-14`,
-                label: `${MONTH_NAMES[month - 1]} 1–14`,
-                year, month
-            }
+            current: wrap(prev.year, prev.month),
+            previous: mid(prev.year, prev.month)
         };
     }
 }
@@ -68,11 +76,12 @@ export default function PayPeriodReport({ shifts, employeeRates, onLoadMonth }) 
     const today = useMemo(() => new Date(), []);
     const { current, previous } = useMemo(() => getPeriods(today), [today]);
 
-    // Ensure both period months are loaded
+    // Ensure every month touched by either period is loaded
     useEffect(() => {
-        onLoadMonth(previous.year, previous.month);
-        onLoadMonth(current.year, current.month);
-    }, [previous.year, previous.month, current.year, current.month, onLoadMonth]);
+        [...previous.months, ...current.months].forEach(({ year, month }) => {
+            onLoadMonth(year, month);
+        });
+    }, [previous, current, onLoadMonth]);
 
     const prevShifts = useMemo(() => filterShifts(shifts, previous), [shifts, previous]);
     const currShifts = useMemo(() => filterShifts(shifts, current), [shifts, current]);
@@ -88,24 +97,31 @@ export default function PayPeriodReport({ shifts, employeeRates, onLoadMonth }) 
         return Array.from(names).sort();
     }, [prevHours, currHours]);
 
-    const getRate = name => {
-        const e = employeeRates.find(r => r.name === name);
-        return e ? e.hourlyRate : 0;
-    };
+    const getEmployee = name => employeeRates.find(r => r.name === name);
 
-    let totalPrevHrs = 0, totalPrevPay = 0, totalCurrHrs = 0, totalCurrPay = 0;
+    let totalPrevHrs = 0, totalCurrHrs = 0;
+    let totalPrevPayroll = 0, totalPrevCash = 0, totalCurrPayroll = 0, totalCurrCash = 0;
 
     const rows = allEmployees.map(name => {
-        const rate = getRate(name);
+        const emp = getEmployee(name);
+        const rate = emp ? emp.hourlyRate : 0;
+        const payrollPercent = emp ? emp.payrollPercent ?? 100 : 100;
+        const cashPercent = emp ? emp.cashPercent ?? (100 - payrollPercent) : 0;
         const ph = prevHours[name] || 0;
         const ch = currHours[name] || 0;
         const pp = ph * rate;
         const cp = ch * rate;
+        const ppPayroll = pp * (payrollPercent / 100);
+        const ppCash = pp * (cashPercent / 100);
+        const cpPayroll = cp * (payrollPercent / 100);
+        const cpCash = cp * (cashPercent / 100);
         totalPrevHrs += ph;
-        totalPrevPay += pp;
         totalCurrHrs += ch;
-        totalCurrPay += cp;
-        return { name, rate, ph, ch, pp, cp };
+        totalPrevPayroll += ppPayroll;
+        totalPrevCash += ppCash;
+        totalCurrPayroll += cpPayroll;
+        totalCurrCash += cpCash;
+        return { name, rate, payrollPercent, cashPercent, ph, ch, ppPayroll, ppCash, cpPayroll, cpCash };
     });
 
     const th = {
@@ -132,33 +148,36 @@ export default function PayPeriodReport({ shifts, employeeRates, onLoadMonth }) 
                 </p>
             ) : (
                 <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '700px' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '980px' }}>
                         <thead>
                             <tr>
                                 <th style={{ ...th, backgroundColor: '#343a40', color: '#fff', textAlign: 'left' }} rowSpan={2}>
                                     Employee
                                 </th>
-                                <th style={{ ...th, backgroundColor: '#6c757d', color: '#fff' }} colSpan={2}>
+                                <th style={{ ...th, backgroundColor: '#6c757d', color: '#fff' }} colSpan={3}>
                                     Previous: {previous.label}
                                 </th>
-                                <th style={{ ...th, backgroundColor: '#007bff', color: '#fff' }} colSpan={2}>
+                                <th style={{ ...th, backgroundColor: '#007bff', color: '#fff' }} colSpan={3}>
                                     Current: {current.label}
                                 </th>
-                                <th style={{ ...th, backgroundColor: '#28a745', color: '#fff' }} colSpan={2}>
+                                <th style={{ ...th, backgroundColor: '#28a745', color: '#fff' }} colSpan={3}>
                                     Total
                                 </th>
                             </tr>
                             <tr>
                                 <th style={{ ...th, backgroundColor: '#868e96', color: '#fff' }}>Hours</th>
-                                <th style={{ ...th, backgroundColor: '#868e96', color: '#fff' }}>Pay</th>
+                                <th style={{ ...th, backgroundColor: '#868e96', color: '#fff' }}>Payroll</th>
+                                <th style={{ ...th, backgroundColor: '#868e96', color: '#fff' }}>Cash</th>
                                 <th style={{ ...th, backgroundColor: '#4dabf7', color: '#fff' }}>Hours</th>
-                                <th style={{ ...th, backgroundColor: '#4dabf7', color: '#fff' }}>Pay</th>
+                                <th style={{ ...th, backgroundColor: '#4dabf7', color: '#fff' }}>Payroll</th>
+                                <th style={{ ...th, backgroundColor: '#4dabf7', color: '#fff' }}>Cash</th>
                                 <th style={{ ...th, backgroundColor: '#40c057', color: '#fff' }}>Hours</th>
-                                <th style={{ ...th, backgroundColor: '#40c057', color: '#fff' }}>Pay</th>
+                                <th style={{ ...th, backgroundColor: '#40c057', color: '#fff' }}>Payroll</th>
+                                <th style={{ ...th, backgroundColor: '#40c057', color: '#fff' }}>Cash</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {rows.map(({ name, rate, ph, ch, pp, cp }) => (
+                            {rows.map(({ name, rate, payrollPercent, cashPercent, ph, ch, ppPayroll, ppCash, cpPayroll, cpCash }) => (
                                 <tr
                                     key={name}
                                     onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f8f9fa'}
@@ -168,17 +187,22 @@ export default function PayPeriodReport({ shifts, employeeRates, onLoadMonth }) 
                                         {name}
                                         {rate > 0 && (
                                             <span style={{ color: '#999', fontSize: '0.78em', marginLeft: '6px' }}>
-                                                ${rate}/hr
+                                                ${rate}/hr · {payrollPercent}%/{cashPercent}% payroll/cash
                                             </span>
                                         )}
                                     </td>
                                     <td style={td}>{ph.toFixed(1)}</td>
-                                    <td style={td}>{rate > 0 ? `$${pp.toFixed(2)}` : '—'}</td>
+                                    <td style={td}>{rate > 0 ? `$${ppPayroll.toFixed(2)}` : '—'}</td>
+                                    <td style={td}>{rate > 0 ? `$${ppCash.toFixed(2)}` : '—'}</td>
                                     <td style={td}>{ch.toFixed(1)}</td>
-                                    <td style={td}>{rate > 0 ? `$${cp.toFixed(2)}` : '—'}</td>
+                                    <td style={td}>{rate > 0 ? `$${cpPayroll.toFixed(2)}` : '—'}</td>
+                                    <td style={td}>{rate > 0 ? `$${cpCash.toFixed(2)}` : '—'}</td>
                                     <td style={{ ...td, fontWeight: 700 }}>{(ph + ch).toFixed(1)}</td>
                                     <td style={{ ...td, fontWeight: 700 }}>
-                                        {rate > 0 ? `$${(pp + cp).toFixed(2)}` : '—'}
+                                        {rate > 0 ? `$${(ppPayroll + cpPayroll).toFixed(2)}` : '—'}
+                                    </td>
+                                    <td style={{ ...td, fontWeight: 700 }}>
+                                        {rate > 0 ? `$${(ppCash + cpCash).toFixed(2)}` : '—'}
                                     </td>
                                 </tr>
                             ))}
@@ -187,16 +211,19 @@ export default function PayPeriodReport({ shifts, employeeRates, onLoadMonth }) 
                             <tr>
                                 <td style={{ ...tdTotal, textAlign: 'left' }}>TOTAL</td>
                                 <td style={tdTotal}>{totalPrevHrs.toFixed(1)}</td>
-                                <td style={tdTotal}>${totalPrevPay.toFixed(2)}</td>
+                                <td style={tdTotal}>${totalPrevPayroll.toFixed(2)}</td>
+                                <td style={tdTotal}>${totalPrevCash.toFixed(2)}</td>
                                 <td style={tdTotal}>{totalCurrHrs.toFixed(1)}</td>
-                                <td style={tdTotal}>${totalCurrPay.toFixed(2)}</td>
+                                <td style={tdTotal}>${totalCurrPayroll.toFixed(2)}</td>
+                                <td style={tdTotal}>${totalCurrCash.toFixed(2)}</td>
                                 <td style={tdTotal}>{(totalPrevHrs + totalCurrHrs).toFixed(1)}</td>
-                                <td style={tdTotal}>${(totalPrevPay + totalCurrPay).toFixed(2)}</td>
+                                <td style={tdTotal}>${(totalPrevPayroll + totalCurrPayroll).toFixed(2)}</td>
+                                <td style={tdTotal}>${(totalPrevCash + totalCurrCash).toFixed(2)}</td>
                             </tr>
                         </tfoot>
                     </table>
                     <p style={{ fontSize: '0.78em', color: '#aaa', marginTop: '10px' }}>
-                        * Pay is estimated from hourly rate in the Employee sheet. Employees with $0/hr show — for pay.
+                        * Pay is estimated from hourly rate, "Payroll %", and "Cash %" in the Employee sheet. Employees with $0/hr show — for pay; missing "Payroll %"/"Cash %" default to 100% payroll / 0% cash.
                     </p>
                 </div>
             )}

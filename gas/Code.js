@@ -65,16 +65,35 @@ function doGet(e) {
     if (e.parameter.action === 'getEmployees') {
       const sheet = doc.getSheetByName('Employee');
       if (!sheet) return createResponse({ employees: [] });
+      const headerRow = getHeaderRow(sheet);
+      const payrollPercentCol = findColumnIndex(headerRow, 'Payroll %');
+      const cashPercentCol    = findColumnIndex(headerRow, 'Cash %');
       const rows = sheet.getDataRange().getValues().slice(1);
       // Columns: 0=Name, 1=HourlyRate, 2=StartDate, 3=Username, 4=Password, 5=Role
+      // "Payroll %" and "Cash %" are named columns (may not exist yet) read
+      // straight from the sheet — no split percentage is computed in code.
       const employees = rows
         .filter(r => r[0])
-        .map(r => ({
-          name:       String(r[0]).trim(),
-          hourlyRate: parseFloat(r[1]) || 0,
-          username:   String(r[3] || '').trim(),
-          role:       String(r[5] || 'Employee').trim()
-        }));
+        .map(r => {
+          const rawPayroll = payrollPercentCol !== -1 ? r[payrollPercentCol] : '';
+          const parsedPayroll = (rawPayroll === '' || rawPayroll === null || typeof rawPayroll === 'undefined')
+            ? 100 : parseFloat(rawPayroll);
+          const payrollPercent = isNaN(parsedPayroll) ? 100 : Math.min(100, Math.max(0, parsedPayroll));
+
+          const rawCash = cashPercentCol !== -1 ? r[cashPercentCol] : '';
+          const parsedCash = (rawCash === '' || rawCash === null || typeof rawCash === 'undefined')
+            ? (100 - payrollPercent) : parseFloat(rawCash);
+          const cashPercent = isNaN(parsedCash) ? (100 - payrollPercent) : Math.min(100, Math.max(0, parsedCash));
+
+          return {
+            name:           String(r[0]).trim(),
+            hourlyRate:     parseFloat(r[1]) || 0,
+            username:       String(r[3] || '').trim(),
+            role:           String(r[5] || 'Employee').trim(),
+            payrollPercent,
+            cashPercent
+          };
+        });
       return createResponse({ employees });
     }
 
