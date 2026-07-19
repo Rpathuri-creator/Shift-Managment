@@ -173,14 +173,6 @@ function doPost(e) {
       return handleUpdateDeposit(e);
     }
 
-    if (e.parameter.action === 'setupPayrollColumns') {
-      return handleSetupPayrollColumns(e);
-    }
-
-    if (e.parameter.action === 'setPayrollSplit') {
-      return handleSetPayrollSplit(e);
-    }
-
     const method = e.parameter.method || 'POST';
     switch (method.toUpperCase()) {
       case 'PUT':    return handleUpdateShift(e);
@@ -320,57 +312,6 @@ function handleUpdateDeposit(e) {
     sheet.getRange(rowIndex, countedBalanceCol).setValue(countedBalance);
     sheet.getRange(rowIndex, differenceCol).setValue(countedBalance - dailyBalance);
     sheet.getRange(rowIndex, reasonCol).setValue(e.parameter.reason || '').setNumberFormat('@STRING@');
-
-    return createResponse({ result: 'success' });
-  } catch (err) {
-    return createResponse({ result: 'error', message: err.toString() });
-  }
-}
-
-// Ensures the Employee sheet has "Payroll %" and "Cash %" columns (creates
-// them at the end of the header row if missing). Safe to call repeatedly.
-function handleSetupPayrollColumns(e) {
-  try {
-    const doc = SpreadsheetApp.openById(scriptProp.getProperty('key'));
-    const sheet = doc.getSheetByName('Employee');
-    if (!sheet) throw new Error('Employee sheet not found');
-
-    const headerRow = getHeaderRow(sheet);
-    getOrCreateColumn(sheet, headerRow, 'Payroll %');
-    getOrCreateColumn(sheet, headerRow, 'Cash %');
-
-    return createResponse({ result: 'success' });
-  } catch (err) {
-    return createResponse({ result: 'error', message: err.toString() });
-  }
-}
-
-// Sets Payroll %/Cash % for one employee (matched by exact name in column A).
-// Creates the columns if they don't exist yet.
-function handleSetPayrollSplit(e) {
-  try {
-    const doc = SpreadsheetApp.openById(scriptProp.getProperty('key'));
-    const sheet = doc.getSheetByName('Employee');
-    if (!sheet) throw new Error('Employee sheet not found');
-
-    const name = String(e.parameter.name || '').trim();
-    if (!name) throw new Error('name is required');
-
-    const headerRow = getHeaderRow(sheet);
-    const payrollCol = getOrCreateColumn(sheet, headerRow, 'Payroll %');
-    const cashCol     = getOrCreateColumn(sheet, headerRow, 'Cash %');
-
-    const values = sheet.getDataRange().getValues();
-    let rowIndex = -1;
-    for (let i = 1; i < values.length; i++) {
-      if (String(values[i][0]).trim() === name) { rowIndex = i + 1; break; }
-    }
-    if (rowIndex === -1) throw new Error('Employee not found: ' + name);
-
-    const payrollPercent = parseFloat(e.parameter.payrollPercent);
-    const cashPercent    = parseFloat(e.parameter.cashPercent);
-    if (!isNaN(payrollPercent)) sheet.getRange(rowIndex, payrollCol).setValue(payrollPercent);
-    if (!isNaN(cashPercent))    sheet.getRange(rowIndex, cashCol).setValue(cashPercent);
 
     return createResponse({ result: 'success' });
   } catch (err) {
