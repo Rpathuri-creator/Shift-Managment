@@ -61,6 +61,21 @@ function doGet(e) {
   try {
     const doc = SpreadsheetApp.openById(scriptProp.getProperty('key'));
 
+    // TEMP debug: dump any sheet's header + first rows by name, e.g.
+    // ?action=debugSheet&sheet=Cash — remove after use.
+    if (e.parameter.action === 'debugSheet') {
+      const name = e.parameter.sheet || '';
+      const sheet = doc.getSheetByName(name);
+      if (!sheet) return createResponse({ error: 'Sheet not found: ' + name });
+      const values = sheet.getDataRange().getValues();
+      return createResponse({
+        sheet: name,
+        rows: values.length,
+        cols: values.length ? values[0].length : 0,
+        data: values.slice(0, 50)
+      });
+    }
+
     // Return employees with hourly rates + role
     if (e.parameter.action === 'getEmployees') {
       const sheet = doc.getSheetByName('Employee');
