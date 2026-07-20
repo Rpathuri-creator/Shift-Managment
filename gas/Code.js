@@ -193,6 +193,11 @@ function doPost(e) {
       return handleUpdateDeposit(e);
     }
 
+    // TEMP: installs a live Total formula on the Cash Count tab — remove after use.
+    if (e.parameter.action === 'addCashTotalFormula') {
+      return handleAddCashTotalFormula(e);
+    }
+
     const method = e.parameter.method || 'POST';
     switch (method.toUpperCase()) {
       case 'PUT':    return handleUpdateShift(e);
@@ -334,6 +339,53 @@ function handleUpdateDeposit(e) {
     sheet.getRange(rowIndex, reasonCol).setValue(e.parameter.reason || '').setNumberFormat('@STRING@');
 
     return createResponse({ result: 'success' });
+  } catch (err) {
+    return createResponse({ result: 'error', message: err.toString() });
+  }
+}
+
+// TEMP: installs `=IF(COUNT(D:O)=0,"",SUMPRODUCT($D$1:$O$1,D:O))` into the
+// "Total" column (B) of "Cash Count" — denomination headers (D1:O1, e.g. 100,
+// 50, 20 ... 0.01) times that row's bill/coin counts (D:O). Only touches rows
+// that already have at least one count entered (so manually-typed totals on
+// Cash Out/Takeout rows are left alone), plus pre-fills the formula on a
+// buffer of blank rows below the data so future entries auto-calculate too.
+function handleAddCashTotalFormula(e) {
+  try {
+    const doc = SpreadsheetApp.openById(scriptProp.getProperty('key'));
+    const sheet = doc.getSheetByName('Cash Count');
+    if (!sheet) throw new Error('Cash Count sheet not found');
+
+    const lastRow = Math.max(sheet.getLastRow(), 1);
+    const bufferRows = parseInt(e.parameter.buffer) || 200;
+
+    let updated = 0, skippedManual = 0;
+
+    if (lastRow >= 2) {
+      const countRange = sheet.getRange(2, 4, lastRow - 1, 12).getValues(); // D2:O<lastRow>
+      for (let i = 0; i < countRange.length; i++) {
+        const row = i + 2;
+        const hasCounts = countRange[i].some(v => v !== '' && v !== null);
+        if (hasCounts) {
+          sheet.getRange(row, 2).setFormula(
+            '=IF(COUNT(D' + row + ':O' + row + ')=0,"",SUMPRODUCT($D$1:$O$1,D' + row + ':O' + row + '))'
+          );
+          updated++;
+        } else {
+          skippedManual++;
+        }
+      }
+    }
+
+    let prefilled = 0;
+    for (let row = lastRow + 1; row <= lastRow + bufferRows; row++) {
+      sheet.getRange(row, 2).setFormula(
+        '=IF(COUNT(D' + row + ':O' + row + ')=0,"",SUMPRODUCT($D$1:$O$1,D' + row + ':O' + row + '))'
+      );
+      prefilled++;
+    }
+
+    return createResponse({ result: 'success', updated, skippedManual, prefilled });
   } catch (err) {
     return createResponse({ result: 'error', message: err.toString() });
   }
