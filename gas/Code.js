@@ -61,6 +61,11 @@ function doGet(e) {
   try {
     const doc = SpreadsheetApp.openById(scriptProp.getProperty('key'));
 
+    // TEMP debug: list every tab name in the spreadsheet — remove after use.
+    if (e.parameter.action === 'listSheets') {
+      return createResponse({ sheets: doc.getSheets().map(s => s.getName()) });
+    }
+
     // TEMP debug: dump any sheet's header + first rows by name, e.g.
     // ?action=debugSheet&sheet=Cash — remove after use.
     if (e.parameter.action === 'debugSheet') {
